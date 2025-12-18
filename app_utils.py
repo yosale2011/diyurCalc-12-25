@@ -254,10 +254,14 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
 
     # Process Daily Segments
     daily_segments = []
-    
+
     # We need access to is_shabbat_time and calculate_wage_rate which are in logic.py
     # They are imported.
-    
+
+    # Track carryover minutes from previous day's chain ending at 08:00
+    # This is used when a work chain continues from 06:30-08:00 to 08:00-...
+    prev_day_carryover_minutes = 0
+
     for day, entry in sorted(daily_map.items()):
         buckets = entry["buckets"]
         shift_names = sorted(entry["shifts"])
@@ -382,7 +386,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         d_payment = 0; d_standby_pay = 0
         chains = []  # List of chain objects for display
 
-        def calculate_chain_pay(segments):
+        def calculate_chain_pay(segments, minutes_offset=0):
             # segments is list of (start, end, label, shift_id, apartment_name, actual_date)
             # Convert to format expected by _calculate_chain_wages: (start, end, shift_id)
             chain_segs = [(s, e, sid) for s, e, l, sid, apt, adate in segments]
@@ -390,8 +394,8 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             # Use the actual_date from the first segment for Shabbat calculation (not display date)
             calc_date = segments[0][5] if segments and segments[0][5] else day_date
 
-            # Use optimized block calculation
-            result = _calculate_chain_wages(chain_segs, calc_date, shabbat_cache)
+            # Use optimized block calculation with carryover offset
+            result = _calculate_chain_wages(chain_segs, calc_date, shabbat_cache, minutes_offset)
 
             c_100 = result["calc100"]
             c_125 = result["calc125"]
@@ -403,13 +407,18 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             c_pay = (c_100/60*1.0 + c_125/60*1.25 + c_150/60*1.5 + c_175/60*1.75 + c_200/60*2.0) * minimum_wage
             return c_pay, c_100, c_125, c_150, c_175, c_200, seg_detail
 
-        def close_chain_and_record(segments, break_reason=""):
+        def close_chain_and_record(segments, break_reason="", minutes_offset=0):
             """Close current chain and add to chains list.
-            Each rate segment becomes a separate row in chains."""
+            Each rate segment becomes a separate row in chains.
+            Returns (pay, c100, c125, c150, c175, c200, chain_total_minutes, chain_ends_at_0800)"""
             if not segments:
-                return 0, 0, 0, 0, 0, 0
+                return 0, 0, 0, 0, 0, 0, 0, False
 
-            pay, c100, c125, c150, c175, c200, seg_detail = calculate_chain_pay(segments)
+            pay, c100, c125, c150, c175, c200, seg_detail = calculate_chain_pay(segments, minutes_offset)
+
+            # Calculate total chain duration (including offset from previous day)
+            chain_duration = sum(e - s for s, e, l, sid, apt, adate in segments)
+            chain_total_minutes = minutes_offset + chain_duration
 
             # Get apartment names from segments - segments is (start, end, label, sid, apt_name, actual_date)
             chain_apartments = set()
@@ -460,7 +469,37 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     "from_prev_day": (seg_start >= MINUTES_PER_DAY) if is_first else False,
                 })
 
-            return pay, c100, c125, c150, c175, c200
+            # Check if chain ends at 08:00 boundary (1920 = 08:00 + 1440)
+            # This indicates the chain continues to the next workday
+            chain_ends_at_0800 = (segments[-1][1] == 1920) if segments else False
+
+            return pay, c100, c125, c150, c175, c200, chain_total_minutes, chain_ends_at_0800
+
+        # Determine if we should use carryover from previous day
+        # Carryover applies if first work event starts at 08:00 (480 minutes)
+        first_work_start = None
+        for evt in all_events:
+            if evt["type"] == "work":
+                first_work_start = evt["start"]
+                break
+
+        use_carryover = (first_work_start == 480 and prev_day_carryover_minutes > 0)
+        current_offset = prev_day_carryover_minutes if use_carryover else 0
+
+        # Reset carryover tracking for this day
+        day_carryover_for_next = 0
+        last_chain_ended_at_0800 = False
+        last_chain_total = 0
+
+        # Re-process chains with proper carryover
+        # We need to re-process since the first chain might need offset
+        current_chain_segments = []
+        last_end = None
+        last_etype = None
+        d_calc100 = 0; d_calc125 = 0; d_calc150 = 0; d_calc175 = 0; d_calc200 = 0
+        d_payment = 0
+        chains = []  # Reset chains list
+        first_chain_of_day = True
 
         for event in all_events:
             start, end, etype = event["start"], event["end"], event["type"]
@@ -477,15 +516,21 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     break_reason = f"הפסקה ({start - last_end} דקות)"
 
             if should_break:
-                pay, c100, c125, c150, c175, c200 = close_chain_and_record(current_chain_segments, break_reason)
+                chain_offset = current_offset if first_chain_of_day else 0
+                pay, c100, c125, c150, c175, c200, chain_total, ends_at_0800 = close_chain_and_record(
+                    current_chain_segments, break_reason, chain_offset)
                 d_payment += pay
                 d_calc100 += c100; d_calc125 += c125; d_calc150 += c150; d_calc175 += c175; d_calc200 += c200
+
+                # Track last chain info for potential carryover to next day
+                last_chain_total = chain_total
+                last_chain_ended_at_0800 = ends_at_0800
+
                 current_chain_segments = []
+                first_chain_of_day = False
 
             if is_special:
-                # Handle special payment and add to chains
                 if etype == "standby":
-                    # Only pay if it's not a continuation of a standby that already started
                     is_cont = (last_etype == "standby" and last_end == start)
                     if not is_cont:
                         rate = get_standby_rate(conn, event.get("seg_id") or 0, event.get("apt"), bool(event.get("married")))
@@ -503,7 +548,6 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                         "break_reason": "",
                         "from_prev_day": start >= MINUTES_PER_DAY,
                     })
-
                 elif etype == "vacation" or etype == "sick":
                     hrs = (end - start) / 60
                     d_payment += hrs * minimum_wage
@@ -530,9 +574,22 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
 
         # Close last chain
         if current_chain_segments:
-            pay, c100, c125, c150, c175, c200 = close_chain_and_record(current_chain_segments, "")
+            chain_offset = current_offset if first_chain_of_day else 0
+            pay, c100, c125, c150, c175, c200, chain_total, ends_at_0800 = close_chain_and_record(
+                current_chain_segments, "", chain_offset)
             d_payment += pay
             d_calc100 += c100; d_calc125 += c125; d_calc150 += c150; d_calc175 += c175; d_calc200 += c200
+
+            # Track for potential carryover
+            last_chain_total = chain_total
+            last_chain_ended_at_0800 = ends_at_0800
+
+        # Update carryover for next day
+        # If the last chain ended at 08:00 (1920 normalized), save its total for next day
+        if last_chain_ended_at_0800:
+            prev_day_carryover_minutes = last_chain_total
+        else:
+            prev_day_carryover_minutes = 0
             
         # Calculate total_minutes
         total_minutes = sum(w[1]-w[0] for w in work_segments)

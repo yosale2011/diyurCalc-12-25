@@ -519,7 +519,8 @@ def _get_shabbat_boundaries(day_date: date, shabbat_cache: Dict[str, Dict[str, s
 def _calculate_chain_wages(
     chain_segments: List[Tuple[int, int, int]],
     day_date: date,
-    shabbat_cache: Dict[str, Dict[str, str]]
+    shabbat_cache: Dict[str, Dict[str, str]],
+    minutes_offset: int = 0
 ) -> Dict[str, Any]:
     """
     חישוב שכר לרצף עבודה (chain) בשיטת בלוקים.
@@ -528,6 +529,12 @@ def _calculate_chain_wages(
     - 480 דקות (מעבר 100% -> 125%)
     - 600 דקות (מעבר 125% -> 150%)
     - גבולות שבת (כניסה/יציאה)
+
+    Args:
+        chain_segments: List of (start_min, end_min, shift_id) tuples
+        day_date: The date for Shabbat calculation
+        shabbat_cache: Cache of Shabbat times
+        minutes_offset: Minutes already worked in this chain (from previous day's carryover)
 
     Returns:
         Dict with calc100, calc125, calc150, calc175, calc200,
@@ -563,7 +570,8 @@ def _calculate_chain_wages(
 
     # Process in blocks based on overtime thresholds
     # Thresholds: 0-480 = tier1, 480-600 = tier2, 600+ = tier3
-    minutes_processed = 0
+    # Start from offset if this chain continues from previous day
+    minutes_processed = minutes_offset
 
     for seg_start, seg_end in flat_segments:
         seg_duration = seg_end - seg_start
@@ -790,6 +798,9 @@ def _process_daily_map(
     work_days_set = set()
     vacation_days_set = set()
 
+    # Track carryover minutes from previous day's chain ending at 08:00
+    prev_day_carryover_minutes = 0
+
     for day_key, entry in sorted(daily_map.items()):
         day_date = entry["date"]
 
@@ -846,6 +857,17 @@ def _process_daily_map(
 
         all_events.sort(key=lambda x: x["start"])
 
+        # Determine if we should use carryover from previous day
+        # Carryover applies if first work event starts at 08:00 (480 minutes)
+        first_work_start = None
+        for evt in all_events:
+            if evt["type"] == "work":
+                first_work_start = evt["start"]
+                break
+
+        use_carryover = (first_work_start == WORK_DAY_CUTOFF and prev_day_carryover_minutes > 0)
+        current_offset = prev_day_carryover_minutes if use_carryover else 0
+
         # משתני רצף
         current_chain_segments = []
         last_end = None
@@ -858,14 +880,26 @@ def _process_daily_map(
             "calc150_shabbat_100": 0, "calc150_shabbat_50": 0
         }
 
-        def close_chain():
-            nonlocal current_chain_segments, day_wages
+        # Track chain info for carryover
+        first_chain_of_day = True
+        last_chain_total = 0
+        last_chain_ended_at_0800 = False
+
+        def close_chain(minutes_offset=0):
+            nonlocal current_chain_segments, day_wages, last_chain_total, last_chain_ended_at_0800
             if not current_chain_segments:
                 return
 
-            chain_wages = _calculate_chain_wages(current_chain_segments, day_date, shabbat_cache)
+            chain_wages = _calculate_chain_wages(current_chain_segments, day_date, shabbat_cache, minutes_offset)
             for key in day_wages:
                 day_wages[key] += chain_wages[key]
+
+            # Calculate chain duration for potential carryover
+            chain_duration = sum(e - s for s, e, _ in current_chain_segments)
+            last_chain_total = minutes_offset + chain_duration
+
+            # Check if chain ends at 08:00 boundary (1920 = 08:00 + 1440)
+            last_chain_ended_at_0800 = (current_chain_segments[-1][1] == 1920) if current_chain_segments else False
 
             current_chain_segments = []
 
@@ -887,7 +921,9 @@ def _process_daily_map(
                         should_break = True
 
             if should_break:
-                close_chain()
+                chain_offset = current_offset if first_chain_of_day else 0
+                close_chain(chain_offset)
+                first_chain_of_day = False
 
             if is_special:
                 if seg_type == "standby":
@@ -911,7 +947,15 @@ def _process_daily_map(
                 last_end = seg_end
                 last_etype = seg_type
 
-        close_chain()
+        # Close last chain with proper offset
+        chain_offset = current_offset if first_chain_of_day else 0
+        close_chain(chain_offset)
+
+        # Update carryover for next day
+        if last_chain_ended_at_0800:
+            prev_day_carryover_minutes = last_chain_total
+        else:
+            prev_day_carryover_minutes = 0
 
         # עדכון סיכומים
         for key in day_wages:
