@@ -246,6 +246,24 @@
     }
   }
   
+  /* Chain row styles */
+  .row-standby {
+    background-color: #f8f9fa;
+    color: #6c757d;
+  }
+  .row-vacation {
+    background-color: #e6fffa;
+    color: #006644;
+  }
+  .cell-standby-active {
+    background-color: #f0f9ff;
+    color: #0369a1;
+  }
+  .cell-standby-cancelled {
+    background-color: #fef2f2;
+    color: #991b1b;
+  }
+  
   /* Screen styles for summary row */
   .panel-chains table tbody tr:last-child {
     background-color: #f2f4f7;
@@ -516,8 +534,7 @@
               </thead>
               <tbody>
                 {% for chain in day.chains %}
-                <tr class="{% if chain.type == 'standby' %}row-standby{% elif chain.type == 'vacation' %}row-vacation{% endif %}" 
-                    style="{% if chain.type == 'standby' %}background-color: #f8f9fa; color: #6c757d;{% elif chain.type == 'vacation' %}background-color: #e6fffa; color: #006644;{% endif %}">
+                <tr class="{% if chain.type == 'standby' %}row-standby{% elif chain.type == 'vacation' %}row-vacation{% endif %}">
                   <td>
                     {{ chain.start_time }}
                     {% if chain.from_prev_day %}
@@ -651,13 +668,13 @@
                   <strong>סיכום חודשי:</strong>
                 </td>
                 <td style="text-align: center; padding: 6px 8px; font-weight: bold;">
-                  {{ "%.2f"|format((monthly_totals.payment or 0) + (monthly_totals.standby_payment or 0) + (monthly_totals.travel or 0) + (monthly_totals.extras or 0)) }}
+                  {{ "%.2f"|format((monthly_totals.payment or 0) + (monthly_totals.travel or 0) + (monthly_totals.extras or 0)) }}
                 </td>
                 <td style="text-align: center; padding: 6px 8px;">
                   {{ (monthly_totals.total_hours | float / 60) | round(2) }}
                 </td>
                 <td style="text-align: center; padding: 6px 8px;">
-                  {{ "%.2f"|format(monthly_totals.payment or 0) }}
+                  {{ "%.2f"|format((monthly_totals.payment or 0) - (monthly_totals.standby_payment or 0)) }}
                 </td>
                 <td style="text-align: center; padding: 6px 8px; font-size: 0.85em;">
                   {{ "%.2f"|format(monthly_totals.standby_payment or 0) }}
@@ -722,7 +739,7 @@
               <td>{{ day.day }}</td>
               <td>{{ day.day_name }}</td>
               <td>{{ (day.total_minutes_no_standby | float / 60) | round(2) }}</td>
-              <td style="{% if day.standby_payment and day.standby_payment > 0 %}background-color: #f0f9ff; color: #0369a1;{% elif day.cancelled_standbys and day.cancelled_standbys|length > 0 %}background-color: #fef2f2; color: #991b1b;{% endif %}">
+              <td class="{% if day.standby_payment and day.standby_payment > 0 %}cell-standby-active{% elif day.cancelled_standbys and day.cancelled_standbys|length > 0 %}cell-standby-cancelled{% endif %}">
                 {% if day.standby_payment and day.standby_payment > 0 %}
                   {{ "%.2f"|format(day.standby_payment) }}
                 {% elif day.cancelled_standbys and day.cancelled_standbys|length > 0 %}
