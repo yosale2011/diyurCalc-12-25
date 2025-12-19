@@ -824,6 +824,7 @@
         </div>
 
         <h3 style="margin: 0 0 12px; font-size: 16px; color: #24292e;">פירוט רכיבי שכר לתשלום</h3>
+        {% set total_cancelled = daily_segments | selectattr('cancelled_standbys') | map(attribute='cancelled_standbys') | map('length') | sum %}
         <table style="max-width: 700px;">
           <thead>
             <tr>
@@ -867,7 +868,7 @@
                         <td>{{ code.merav_code or '' }}</td>
                         
                         {% if key == 'standby' %}
-                            <td>{{ val }}</td>
+                            <td>{{ val - total_cancelled }}</td>
                             <td>
                                 {% if val > 0 %}
                                     {{ "%.2f"|format((monthly_totals.standby_payment or 0) / val) }} ₪

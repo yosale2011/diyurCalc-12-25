@@ -325,6 +325,16 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 seen.add(k)
         work_segments = deduped  # Each is (start, end, label, sid, apt_name, actual_date)
         
+        # Dedup standby
+        deduped_sb = []
+        seen_sb = set()
+        for sb in standby_segments:
+            k = (sb[0], sb[1], sb[2])  # (start, end, seg_id)
+            if k not in seen_sb:
+                deduped_sb.append(sb)
+                seen_sb.add(k)
+        standby_segments = deduped_sb
+
         # Standby Cancellation Logic
         cancelled_standbys = []
         valid_standby = []
@@ -339,11 +349,13 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             
             ratio = total_overlap / duration
             if ratio >= STANDBY_CANCEL_OVERLAP_THRESHOLD:
-                cancelled_standbys.append({
-                    "start": sb_start % MINUTES_PER_DAY, 
-                    "end": sb_end % MINUTES_PER_DAY, 
-                    "reason": f"חפיפה ({int(ratio*100)}%)"
-                })
+                # Only show cancellation if it starts after 00:00 (to avoid double counting tails)
+                if sb_start % MINUTES_PER_DAY > 0:
+                    cancelled_standbys.append({
+                        "start": sb_start % MINUTES_PER_DAY, 
+                        "end": sb_end % MINUTES_PER_DAY, 
+                        "reason": f"חפיפה ({int(ratio*100)}%)"
+                    })
             else:
                 valid_standby.append(sb)
         standby_segments = valid_standby

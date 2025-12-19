@@ -858,6 +858,16 @@ def _process_daily_map(
                 deduped.append(ws)
                 seen.add(key)
         work_segments = deduped
+        
+        # הסרת כפילויות מקטעי כוננות
+        seen_standby = set()
+        deduped_standby = []
+        for sb in standby_segments:
+            key = (sb[0], sb[1], sb[2])  # start_time, end_time, segment_id
+            if key not in seen_standby:
+                deduped_standby.append(sb)
+                seen_standby.add(key)
+        standby_segments = deduped_standby
 
         # ביטול כוננות אם יש חפיפה מעל 70%
         standby_filtered = []
@@ -1076,10 +1086,12 @@ def calculate_person_monthly_totals(
         # בניית מפת ימים באמצעות הפונקציה המשותפת
         daily_map = _build_daily_map(reports, segments_by_shift, year, month)
 
-        # ספירת כוננויות מדיווחים מקוריים
+        # ספירת כוננויות מדיווחים מקוריים - סופר תאריכים ייחודיים עם כוננות
+        dates_with_standby = set()
         for r in reports:
             if r["shift_type_id"] and shift_has_standby.get(r["shift_type_id"], False):
-                monthly_totals["standby"] += 1
+                dates_with_standby.add(r["date"])
+        monthly_totals["standby"] = len(dates_with_standby)
 
         # פונקציה לקבלת תעריף כוננות מDB
         def get_standby_rate_from_db(seg_id: int, apt_type: Optional[int], is_married: bool) -> float:
@@ -1182,10 +1194,12 @@ def _calculate_totals_from_data(
 
     # עיבוד דיווחי שעות - רק אם יש דיווחים
     if reports:
-        # Count standby from reports
+        # Count standby from reports - count unique dates with standby
+        dates_with_standby = set()
         for r in reports:
             if r["shift_type_id"] and shift_has_standby.get(r["shift_type_id"], False):
-                monthly_totals["standby"] += 1
+                dates_with_standby.add(r["date"])
+        monthly_totals["standby"] = len(dates_with_standby)
 
         # בניית מפת ימים באמצעות הפונקציה המשותפת
         daily_map = _build_daily_map(reports, segments_by_shift, year, month)
