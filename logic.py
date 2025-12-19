@@ -30,9 +30,37 @@ if not DB_CONNECTION_STRING:
 
 def get_db_connection():
     """Create and return a PostgreSQL database connection."""
-    conn = psycopg2.connect(DB_CONNECTION_STRING)
-    # Don't set cursor_factory at connection level - let each cursor decide
-    return conn
+    try:
+        conn = psycopg2.connect(DB_CONNECTION_STRING)
+        # Don't set cursor_factory at connection level - let each cursor decide
+        return conn
+    except psycopg2.OperationalError as e:
+        error_msg = str(e)
+        if "could not translate host name" in error_msg or "Name or service not known" in error_msg:
+            logger.error(
+                f"Database DNS resolution failed. Hostname cannot be resolved.\n"
+                f"Error: {error_msg}\n"
+                f"Please check:\n"
+                f"1. Your internet connection\n"
+                f"2. DNS settings\n"
+                f"3. VPN/firewall configuration\n"
+                f"4. Database hostname in DATABASE_URL is correct"
+            )
+        elif "connection refused" in error_msg.lower():
+            logger.error(
+                f"Database connection refused.\n"
+                f"Error: {error_msg}\n"
+                f"Please check:\n"
+                f"1. Database server is running\n"
+                f"2. Port number is correct\n"
+                f"3. Firewall allows connections"
+            )
+        else:
+            logger.error(f"Database connection error: {error_msg}")
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected database connection error: {e}")
+        raise
 
 
 def dict_cursor(conn):

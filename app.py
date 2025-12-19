@@ -11,6 +11,9 @@ from datetime import datetime
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+import psycopg2
 
 from config import config
 from logic import (
@@ -39,6 +42,56 @@ templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
 templates.env.filters["human_date"] = human_date
 templates.env.filters["format_currency"] = format_currency
 
+# Global exception handler for database connection errors
+@app.exception_handler(psycopg2.OperationalError)
+async def database_connection_error_handler(request: Request, exc: psycopg2.OperationalError):
+    """Handle database connection errors with helpful messages."""
+    error_msg = str(exc)
+    
+    if "could not translate host name" in error_msg or "Name or service not known" in error_msg:
+        user_message = (
+            "שגיאת חיבור לבסיס הנתונים: לא ניתן לפתור את שם השרת.\n\n"
+            "אפשרויות לפתרון:\n"
+            "1. בדוק את חיבור האינטרנט\n"
+            "2. ודא שהחיבור ל-VPN פעיל (אם נדרש)\n"
+            "3. בדוק את הגדרות ה-DNS\n"
+            "4. ודא שה-DATABASE_URL נכון בקובץ .env"
+        )
+    elif "connection refused" in error_msg.lower():
+        user_message = (
+            "שגיאת חיבור לבסיס הנתונים: השרת דחה את החיבור.\n\n"
+            "אפשרויות לפתרון:\n"
+            "1. ודא ששרת בסיס הנתונים פועל\n"
+            "2. בדוק את מספר הפורט\n"
+            "3. ודא שהחומת אש מאפשרת חיבורים"
+        )
+    else:
+        user_message = f"שגיאת חיבור לבסיס הנתונים: {error_msg}"
+    
+    logger.error(f"Database connection error: {error_msg}")
+    
+    # Return HTML error page for web requests
+    if request.url.path.startswith('/api/'):
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=503,
+            content={
+                "error": user_message,
+                "error_type": "database_connection_error"
+            }
+        )
+    
+    return templates.TemplateResponse(
+        "error.html",
+        {
+            "request": request,
+            "error_message": user_message,
+            "error_id": None,
+            "back_url": "/"
+        },
+        status_code=503
+    )
+
 @app.get("/debug/filters")
 def debug_filters():
     """Debug endpoint to check if filters are registered."""
@@ -51,7 +104,20 @@ def debug_filters():
 # Route registrations
 @app.get("/health")
 def health_check():
-    return {"status": "ok"}
+    """Health check endpoint that tests database connectivity."""
+    try:
+        from database import get_conn
+        with get_conn() as conn:
+            # Simple query to test connection
+            conn.execute("SELECT 1").fetchone()
+        return {"status": "ok", "database": "connected"}
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {
+            "status": "error",
+            "database": "disconnected",
+            "error": str(e)
+        }, 503
 
 
 @app.get("/", response_class=HTMLResponse)
