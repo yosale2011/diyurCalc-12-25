@@ -270,12 +270,8 @@ def guide_view(
                                              "חופשה" in shift_name or
                                              "מחלה" in shift_name)
                         
-                        # Override standby to work if this is actual work reported during standby hours
                         segment_type = seg['segment_type']
-                        if segment_type == 'standby' and not is_vacation_report:
-                            # If there's an actual work report (not vacation/sick), treat it as work
-                            segment_type = 'work'
-                        
+
                         if segment_type == 'standby':
                             # Standby payment logic
                             apt_type = report.get('apartment_type_id')

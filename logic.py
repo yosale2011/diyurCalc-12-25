@@ -524,11 +524,6 @@ def _build_daily_map(
                         eff_end = eff_end_in_part
 
                     eff_type = seg["segment_type"]
-                    
-                    # Override standby to work if this is actual work reported during standby hours
-                    if eff_type == "standby" and not is_vacation_report:
-                        # If there's an actual work report (not vacation/sick), treat it as work
-                        eff_type = "work"
 
                     segment_id = seg.get("id")
                     apartment_type_id = r.get("apartment_type_id")

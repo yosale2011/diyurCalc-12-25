@@ -203,11 +203,6 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     else:
                          effective_seg_type = seg["segment_type"]
                     
-                    # Override standby to work if this is actual work reported during standby hours
-                    if effective_seg_type == "standby" and not is_vacation_report:
-                        # If there's an actual work report (not vacation/sick), treat it as work
-                        effective_seg_type = "work"
-
                     if effective_seg_type == "standby":
                         label = "כוננות"
                     elif effective_seg_type == "vacation":
