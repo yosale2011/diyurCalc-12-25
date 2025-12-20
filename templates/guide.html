@@ -906,18 +906,29 @@
                             <td>-</td>
                             <td>-</td>
                             <td>{{ val | format_currency }}</td>
+                        {% elif key == 'calc_variable' %}
+                            {# שעות בתעריף משתנה - תעריף שונה משכר מינימום #}
+                            <td>{{ (val | float / 60) | round(2) }}</td>
+                            <td>{{ "%.2f"|format(monthly_totals.variable_rate_value or 0) }} ₪</td>
+                            <td>{{ (monthly_totals.payment_calc_variable or 0) | format_currency }}</td>
                         {% else %}
                             <td>{{ (val | float / 60) | round(2) }}</td>
-                            
+
                             {% set multiplier = 1.0 %}
                             {% if '125' in key %}{% set multiplier = 1.25 %}
                             {% elif '150' in key %}{% set multiplier = 1.5 %}
                             {% elif '175' in key %}{% set multiplier = 1.75 %}
                             {% elif '200' in key %}{% set multiplier = 2.0 %}
                             {% endif %}
-                            
+
+                            {# For regular hours, always use minimum wage #}
                             <td>{{ "%.2f"|format(hourly_rate * multiplier) }} ₪</td>
+                            {% set payment_key = 'payment_' ~ key %}
+                            {% if monthly_totals[payment_key] is defined and monthly_totals[payment_key] > 0 %}
+                            <td>{{ monthly_totals[payment_key] | format_currency }}</td>
+                            {% else %}
                             <td>{{ ((val | float / 60) * hourly_rate * multiplier) | format_currency }}</td>
+                            {% endif %}
                         {% endif %}
                     </tr>
                 {% endif %}

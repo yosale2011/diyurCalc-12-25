@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
 templates.env.filters["human_date"] = human_date
 templates.env.filters["format_currency"] = format_currency
+templates.env.globals["app_version"] = config.VERSION
 
 
 def simple_summary_view(
@@ -237,6 +238,73 @@ def guide_view(
                 conn.conn, person_id, selected_year, selected_month, shabbat_cache, MINIMUM_WAGE
             )
             logger.info(f"calculate_person_monthly_totals took: {time.time() - totals_start:.4f}s")
+
+            # Recalculate payment from daily_segments to use custom shift rates
+            # (daily_segments uses get_effective_hourly_rate which handles custom shift rates)
+            total_payment_from_segments = sum(day.get("payment", 0) for day in daily_segments)
+            total_standby_from_segments = sum(day.get("standby_payment", 0) for day in daily_segments)
+
+            # Calculate payment breakdown by rate category from chains
+            # Sum minutes and payment for each category separately
+            # Also track variable rate hours (non-minimum wage) separately
+            minutes_by_rate = {"calc100": 0, "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0}
+            payment_by_rate = {"calc100": 0.0, "calc125": 0.0, "calc150": 0.0, "calc175": 0.0, "calc200": 0.0}
+
+            # Track variable rate hours separately (shifts with custom rate != minimum wage)
+            variable_rate_minutes = 0
+            variable_rate_payment = 0.0
+            variable_rate_value = None  # The actual rate used
+
+            for day in daily_segments:
+                for chain in day.get("chains", []):
+                    if chain.get("type") == "work":
+                        effective_rate = chain.get("effective_rate", MINIMUM_WAGE)
+                        is_variable_rate = abs(effective_rate - MINIMUM_WAGE) > 0.01  # Not minimum wage
+
+                        # Sum minutes and calculate payment for each rate category
+                        for rate_key in ["calc100", "calc125", "calc150", "calc175", "calc200"]:
+                            mins = chain.get(rate_key, 0)
+                            if mins > 0:
+                                multiplier = {"calc100": 1.0, "calc125": 1.25, "calc150": 1.5, "calc175": 1.75, "calc200": 2.0}[rate_key]
+                                payment = (mins / 60) * multiplier * effective_rate
+
+                                if is_variable_rate:
+                                    # Track separately for variable rate
+                                    variable_rate_minutes += mins
+                                    variable_rate_payment += payment
+                                    variable_rate_value = effective_rate
+                                else:
+                                    # Regular minimum wage hours
+                                    minutes_by_rate[rate_key] += mins
+                                    payment_by_rate[rate_key] += payment
+
+            # Store calculated payments in monthly_totals for template use
+            monthly_totals["payment_calc100"] = payment_by_rate["calc100"]
+            monthly_totals["payment_calc125"] = payment_by_rate["calc125"]
+            monthly_totals["payment_calc150"] = payment_by_rate["calc150"]
+            monthly_totals["payment_calc175"] = payment_by_rate["calc175"]
+            monthly_totals["payment_calc200"] = payment_by_rate["calc200"]
+
+            # Override the minutes values to exclude variable rate hours
+            # This prevents double-counting in the payment table
+            monthly_totals["calc100"] = minutes_by_rate["calc100"]
+            monthly_totals["calc125"] = minutes_by_rate["calc125"]
+            monthly_totals["calc150"] = minutes_by_rate["calc150"]
+            monthly_totals["calc175"] = minutes_by_rate["calc175"]
+            monthly_totals["calc200"] = minutes_by_rate["calc200"]
+
+            # Store variable rate hours data
+            monthly_totals["calc_variable"] = variable_rate_minutes  # Minutes at variable rate
+            monthly_totals["payment_calc_variable"] = variable_rate_payment
+            monthly_totals["variable_rate_value"] = variable_rate_value or MINIMUM_WAGE
+
+            # Calculate effective hourly rate for regular hours (minimum wage)
+            effective_hourly_rate = MINIMUM_WAGE
+
+            # Override monthly_totals payment with correctly calculated values
+            monthly_totals["payment"] = total_payment_from_segments + total_standby_from_segments
+            monthly_totals["standby_payment"] = total_standby_from_segments
+            monthly_totals["effective_hourly_rate"] = effective_hourly_rate
 
             # Get raw reports for the template
             start_dt, end_dt = month_range_ts(selected_year, selected_month)

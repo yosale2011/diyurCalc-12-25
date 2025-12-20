@@ -246,7 +246,8 @@ def available_months(rows: Iterable[Dict]) -> List[Tuple[int, int]]:
 @cached(ttl=300)  # Cache for 5 minutes
 def available_months_from_db() -> List[Tuple[int, int]]:
     """Fetch distinct months from time_reports table."""
-    conn = get_db_connection()
+    from database import get_pooled_connection, return_connection
+    conn = get_pooled_connection()
     try:
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         # Optimized: extract year/month directly in SQL instead of fetching all dates
@@ -261,7 +262,7 @@ def available_months_from_db() -> List[Tuple[int, int]]:
         rows = cursor.fetchall()
     finally:
         cursor.close()
-        conn.close()
+        return_connection(conn)
 
     return [(r["year"], r["month"]) for r in rows]
 
@@ -269,7 +270,8 @@ def available_months_from_db() -> List[Tuple[int, int]]:
 @cached(ttl=1800)  # Cache for 30 minutes since guide data changes infrequently
 def get_active_guides() -> List[Dict[str, Any]]:
     """Fetch active guides from people table."""
-    conn = get_db_connection()
+    from database import get_pooled_connection, return_connection
+    conn = get_pooled_connection()
     try:
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
         cursor.execute(
@@ -283,8 +285,8 @@ def get_active_guides() -> List[Dict[str, Any]]:
         rows = cursor.fetchall()
     finally:
         cursor.close()
-        conn.close()
-    
+        return_connection(conn)
+
     return [dict(row) for row in rows]
 
 
@@ -1268,7 +1270,9 @@ def calculate_person_monthly_totals(
     cursor.execute("""
         SELECT tr.*, st.name as shift_name,
                a.apartment_type_id,
-               p.is_married
+               p.is_married,
+               st.rate as shift_rate,
+               st.is_minimum_wage as shift_is_minimum_wage
         FROM time_reports tr
         LEFT JOIN shift_types st ON st.id = tr.shift_type_id
         LEFT JOIN apartments a ON tr.apartment_id = a.id

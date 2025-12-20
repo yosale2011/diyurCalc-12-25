@@ -6,7 +6,10 @@
       "Bash(git -C \"f:\\\\DiyurClock\\\\103\\\\DiyurCalc\" log --oneline -20)",
       "Bash(git checkout:*)",
       "Bash(cat:*)",
-      "Bash(iconv:*)"
+      "Bash(iconv:*)",
+      "Bash(chcp 6500)",
+      "Bash(git -C \"f:\\\\DiyurClock\\\\105\\\\diyur003\" status:*)",
+      "Bash(del \"f:\\\\DiyurClock\\\\105\\\\diyur003\\\\check_shifts.py\")"
     ],
     "deny": [],
     "ask": []

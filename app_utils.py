@@ -13,6 +13,30 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+def get_effective_hourly_rate(report, minimum_wage: float) -> float:
+    """
+    Get the effective hourly rate for a shift.
+    If the shift has a custom rate defined (is_minimum_wage=False and rate is set),
+    use that rate. Otherwise, use the minimum wage.
+    
+    Args:
+        report: The report dict containing shift_rate and shift_is_minimum_wage
+        minimum_wage: The default minimum wage rate
+        
+    Returns:
+        The effective hourly rate to use for payment calculation
+    """
+    shift_rate = report.get('shift_rate')
+    is_minimum_wage = report.get('shift_is_minimum_wage', True)
+    
+    # If shift has a custom rate and is NOT using minimum wage
+    if shift_rate and not is_minimum_wage:
+        # shift_rate is stored in agorot (cents), convert to shekels
+        return float(shift_rate) / 100
+    
+    return minimum_wage
+
+
 def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat_cache: Dict, minimum_wage: float):
     """
     Calculates detailed daily segments for a given employee and month.
@@ -31,6 +55,8 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                st.color AS shift_color,
                st.for_friday_eve,
                st.for_shabbat_holiday,
+               st.rate AS shift_rate,
+               st.is_minimum_wage AS shift_is_minimum_wage,
                ap.name AS apartment_name,
                ap.apartment_type_id,
                p.is_married,
@@ -64,6 +90,14 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
     segments_by_shift = {}
     for seg in shift_segments:
         segments_by_shift.setdefault(seg["shift_type_id"], []).append(seg)
+    
+    # Build a map of shift_type_id -> effective hourly rate
+    # This allows using custom rates for special shifts (like cleaning)
+    shift_rates = {}
+    for r in reports:
+        shift_id = r.get("shift_type_id")
+        if shift_id and shift_id not in shift_rates:
+            shift_rates[shift_id] = get_effective_hourly_rate(r, minimum_wage)
         
     daily_map = {}
     
@@ -495,25 +529,27 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
 
             for s, e, label, sid, apt_name, actual_date in work_segments:
                 duration = e - s
+                # Get effective hourly rate for this shift (uses custom rate if defined)
+                effective_rate = shift_rates.get(sid, minimum_wage)
                 # חישוב לפי האחוז הקבוע
                 if "100%" in label:
                     d_calc100 += duration
-                    pay = (duration / 60) * 1.0 * minimum_wage
+                    pay = (duration / 60) * 1.0 * effective_rate
                 elif "125%" in label:
                     d_calc125 += duration
-                    pay = (duration / 60) * 1.25 * minimum_wage
+                    pay = (duration / 60) * 1.25 * effective_rate
                 elif "150%" in label:
                     d_calc150 += duration
-                    pay = (duration / 60) * 1.5 * minimum_wage
+                    pay = (duration / 60) * 1.5 * effective_rate
                 elif "175%" in label:
                     d_calc175 += duration
-                    pay = (duration / 60) * 1.75 * minimum_wage
+                    pay = (duration / 60) * 1.75 * effective_rate
                 elif "200%" in label:
                     d_calc200 += duration
-                    pay = (duration / 60) * 2.0 * minimum_wage
+                    pay = (duration / 60) * 2.0 * effective_rate
                 else:
                     d_calc100 += duration
-                    pay = (duration / 60) * 1.0 * minimum_wage
+                    pay = (duration / 60) * 1.0 * effective_rate
 
                 d_payment += pay
 
@@ -535,6 +571,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     "segments": [(start_str, end_str, label)],
                     "break_reason": "",
                     "from_prev_day": False,
+                    "effective_rate": effective_rate,
                 })
 
             total_minutes = sum(w[1]-w[0] for w in work_segments)
@@ -615,8 +652,12 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             c_200 = result["calc200"]
             seg_detail = result.get("segments_detail", [])
 
-            c_pay = (c_100/60*1.0 + c_125/60*1.25 + c_150/60*1.5 + c_175/60*1.75 + c_200/60*2.0) * minimum_wage
-            return c_pay, c_100, c_125, c_150, c_175, c_200, seg_detail
+            # Get effective rate from first segment's shift_id (all segments in chain should have same rate)
+            first_shift_id = segments[0][3] if segments else None
+            effective_rate = shift_rates.get(first_shift_id, minimum_wage)
+            
+            c_pay = (c_100/60*1.0 + c_125/60*1.25 + c_150/60*1.5 + c_175/60*1.75 + c_200/60*2.0) * effective_rate
+            return c_pay, c_100, c_125, c_150, c_175, c_200, seg_detail, effective_rate
 
         def close_chain_and_record(segments, break_reason="", minutes_offset=0):
             """Close current chain and add to chains list.
@@ -625,7 +666,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             if not segments:
                 return 0, 0, 0, 0, 0, 0, 0, False
 
-            pay, c100, c125, c150, c175, c200, seg_detail = calculate_chain_pay(segments, minutes_offset)
+            pay, c100, c125, c150, c175, c200, seg_detail, effective_rate = calculate_chain_pay(segments, minutes_offset)
 
             # Calculate total chain duration (including offset from previous day)
             chain_duration = sum(e - s for s, e, l, sid, apt, adate in segments)
@@ -658,7 +699,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 elif "200%" in seg_label:
                     seg_c200 = seg_duration
 
-                seg_pay = (seg_c100/60*1.0 + seg_c125/60*1.25 + seg_c150/60*1.5 + seg_c175/60*1.75 + seg_c200/60*2.0) * minimum_wage
+                seg_pay = (seg_c100/60*1.0 + seg_c125/60*1.25 + seg_c150/60*1.5 + seg_c175/60*1.75 + seg_c200/60*2.0) * effective_rate
 
                 start_str = f"{seg_start // 60 % 24:02d}:{seg_start % 60:02d}"
                 end_str = f"{seg_end // 60 % 24:02d}:{seg_end % 60:02d}"
@@ -678,6 +719,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     "segments": [(start_str, end_str, seg_label)],
                     "break_reason": break_reason if is_last else "",
                     "from_prev_day": (seg_start >= MINUTES_PER_DAY) if is_first else False,
+                    "effective_rate": effective_rate,
                 })
 
             # Check if chain ends at 08:00 boundary (1920 = 08:00 + 1440)
@@ -768,6 +810,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                         "segments": [],
                         "break_reason": "",
                         "from_prev_day": start >= MINUTES_PER_DAY,
+                        "effective_rate": minimum_wage,
                     })
                 elif etype == "vacation" or etype == "sick":
                     hrs = (end - start) / 60
@@ -784,6 +827,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                         "segments": [],
                         "break_reason": "",
                         "from_prev_day": start >= MINUTES_PER_DAY,
+                        "effective_rate": minimum_wage,
                     })
 
                 last_end = end
