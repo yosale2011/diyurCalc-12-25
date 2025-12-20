@@ -1,55 +1,69 @@
 {% extends "base.html" %}
 
 {% block content %}
-<div class="card">
+<style>
+    .codes-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .codes-table th, .codes-table td { padding: 6px 8px; border-bottom: 1px solid #eee; }
+    .codes-table th { background: #f8f9fa; font-weight: 600; text-align: right; font-size: 12px; }
+    .codes-table tr:hover { background: #f5f7fa; }
+    .codes-table input[type="text"], .codes-table input[type="number"] {
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 4px 8px;
+        font-size: 13px;
+    }
+    .codes-table input[type="text"]:focus, .codes-table input[type="number"]:focus {
+        border-color: #1f6feb;
+        outline: none;
+    }
+    .order-input { width: 45px; text-align: center; }
+    .code-input { width: 60px; text-align: center; font-family: monospace; }
+    .name-input { width: 100%; box-sizing: border-box; }
+    .key-cell { font-family: monospace; font-size: 11px; color: #666; }
+</style>
+
+<div class="card" style="max-width: 700px;">
     <div class="header-line">
-        <h2 class="section-title">ניהול סמלי שכר (מירב)</h2>
+        <h2 class="section-title" style="font-size: 18px; margin: 0;">ניהול סמלי שכר</h2>
         <div class="controls">
-            <a href="/" class="button" style="text-decoration: none; padding: 6px 12px; border: 1px solid #ccc; border-radius: 4px; color: #333;">חזרה לדוח</a>
+            <a href="/summary" style="text-decoration: none; padding: 4px 10px; font-size: 12px; border: 1px solid #ccc; border-radius: 4px; color: #333;">חזרה לסיכום</a>
         </div>
     </div>
 
-    <p style="color: #666; margin-bottom: 20px;">
-        כאן ניתן לערוך את שמות הרכיבים, קודי מירב, וסדר התצוגה בדוח ייצוא השכר.
-        <br>
-        השינויים ישפיעו על דוח השכר באופן מיידי.
+    <p style="color: #666; margin: 10px 0 15px; font-size: 13px;">
+        עריכת שמות רכיבים וקודי מירב לייצוא גשר.
     </p>
 
     <form method="post" action="/admin/payment-codes/update">
-        <table>
+        <table class="codes-table">
             <thead>
                 <tr>
                     <th style="width: 50px;">סדר</th>
-                    <th>תיאור רכיב (לתצוגה)</th>
-                    <th>קוד מירב</th>
-                    <th style="width: 150px;">מזהה פנימי (System Key)</th>
+                    <th style="width: 70px;">קוד</th>
+                    <th>תיאור</th>
+                    <th style="width: 120px;">מזהה</th>
                 </tr>
             </thead>
             <tbody>
                 {% for code in codes %}
                 <tr>
                     <td>
-                        <input type="number" name="display_order_{{ code.id }}" value="{{ code.display_order }}" style="width: 50px; padding: 4px;">
+                        <input type="number" name="display_order_{{ code.id }}" value="{{ code.display_order }}" class="order-input">
                     </td>
                     <td>
-                        <input type="text" name="display_name_{{ code.id }}" value="{{ code.display_name }}" style="width: 100%; padding: 4px; box-sizing: border-box;">
+                        <input type="text" name="merav_code_{{ code.id }}" value="{{ code.merav_code }}" class="code-input">
                     </td>
                     <td>
-                        <input type="text" name="merav_code_{{ code.id }}" value="{{ code.merav_code }}" style="width: 100%; padding: 4px; box-sizing: border-box;">
+                        <input type="text" name="display_name_{{ code.id }}" value="{{ code.display_name }}" class="name-input">
                     </td>
-                    <td>
-                        <input type="text" name="icon_{{ code.id }}" value="{{ code.icon if 'icon' in code.keys() else '' }}" placeholder="⏰" style="width: 100%; padding: 4px; box-sizing: border-box; font-size: 18px; text-align: center;">
-                    </td>
-                    <td class="muted" style="font-family: monospace;">
-                        {{ code.internal_key }}
-                    </td>
+                    <td class="key-cell">{{ code.internal_key }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
 
-        <div style="margin-top: 20px; text-align: left;">
-            <button type="submit" style="padding: 10px 20px; font-size: 16px; font-weight: bold; background-color: #28a745; border-color: #28a745;">שמור שינויים</button>
+        <div style="margin-top: 15px; text-align: left;">
+            <button type="submit" style="padding: 8px 16px; font-size: 14px; font-weight: bold;">שמור</button>
         </div>
     </form>
 </div>

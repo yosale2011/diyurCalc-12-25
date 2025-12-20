@@ -502,6 +502,7 @@ def get_export_preview(conn, year: int, month: int, limit: int = 50) -> List[Dic
         if not meirav_code:
             continue
 
+        person_id = person_data.get('person_id') or person_data.get('id')
         person_name = person_data.get('name', '')
         totals = person_data.get('totals', {})
 
@@ -520,6 +521,7 @@ def get_export_preview(conn, year: int, month: int, limit: int = 50) -> List[Dic
 
         if person_lines:
             preview.append({
+                'person_id': person_id,
                 'name': person_name,
                 'meirav_code': meirav_code,
                 'lines': person_lines

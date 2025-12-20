@@ -3,141 +3,315 @@
 {% block content %}
 <style>
     main { max-width: 95% !important; }
-    .export-table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-    .export-table th, .export-table td { 
-        border: 1px solid #ddd; 
-        padding: 8px; 
-        text-align: center; 
+    .export-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }
+    .export-table th, .export-table td {
+        border: 1px solid #ddd;
+        padding: 4px 6px;
+        text-align: center;
     }
-    .export-table th { background: #f2f4f7; }
-    .export-table tr:nth-child(even) { background: #f9f9f9; }
-    .person-row { background: #e3f2fd !important; font-weight: bold; }
-    .symbol-row td:first-child { padding-right: 30px; }
+    .export-table th { background: #f2f4f7; font-size: 11px; }
+    .export-table th div { font-size: 9px; color: #666; }
+    .export-table tbody tr:hover { background: #f5f5f5; }
+    .export-table tbody tr.hidden { display: none; }
+    .qty-row { background: #fff; }
+    .rate-row { background: #fafafa; font-size: 11px; color: #666; }
+    .name-cell {
+        position: sticky;
+        right: 0;
+        background: #fff;
+        z-index: 1;
+        border-left: 2px solid #ddd;
+        font-weight: bold;
+        text-align: right !important;
+    }
+    .rate-row .name-cell { background: #fafafa; font-weight: normal; font-size: 11px; }
+    .checkbox-cell { width: 30px; }
+    .download-btn {
+        background: #28a745;
+        color: white;
+        border: none;
+        padding: 4px 8px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 11px;
+        text-decoration: none;
+        display: inline-block;
+    }
+    .download-btn:hover { background: #218838; }
     .code-badge {
         display: inline-block;
-        padding: 2px 8px;
-        border-radius: 4px;
-        font-size: 12px;
+        padding: 1px 6px;
+        border-radius: 3px;
+        font-size: 10px;
         font-weight: bold;
+        background: #e8f5e9;
+        color: #2e7d32;
     }
-    .type-hours { background: #e8f5e9; color: #2e7d32; }
-    .type-money { background: #fff3e0; color: #ef6c00; }
-    .type-days { background: #e3f2fd; color: #1565c0; }
-    .legend { display: flex; gap: 20px; margin: 20px 0; flex-wrap: wrap; }
-    .legend-item { display: flex; align-items: center; gap: 8px; }
+    .totals-row { background: #333 !important; color: #fff; font-weight: bold; }
+    .totals-row td { border-color: #555; }
+    .search-box {
+        padding: 6px 10px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        font-size: 13px;
+        width: 180px;
+    }
+    .search-box:focus { border-color: #1f6feb; outline: none; }
+    /* Modal styles */
+    .modal-overlay {
+        display: none;
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.5);
+        z-index: 100;
+        justify-content: center;
+        align-items: center;
+    }
+    .modal-overlay.show { display: flex; }
+    .modal-content {
+        background: white;
+        border-radius: 10px;
+        padding: 20px;
+        max-width: 600px;
+        max-height: 80vh;
+        overflow-y: auto;
+    }
+    .legend-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .legend-table th, .legend-table td { padding: 6px 10px; border-bottom: 1px solid #eee; text-align: right; }
+    .legend-table th { background: #f8f9fa; }
 </style>
 
 <div class="card" style="max-width: none; width: 100%;">
-    <div class="header-line">
-        <h2 class="section-title">תצוגה מקדימה - ייצוא גשר</h2>
-        <div class="controls">
-            <form method="get" style="display: flex; gap: 10px; align-items: center;">
-                <select name="month" onchange="this.form.submit()">
+    <div class="header-line" style="flex-wrap: wrap; gap: 10px;">
+        <h2 class="section-title" style="font-size: 18px; margin: 0;">
+            ייצוא גשר
+            <span style="font-size: 0.7em; color: #666; font-weight: normal;">({{ preview|length }} עובדים)</span>
+        </h2>
+        <div class="controls" style="flex-wrap: wrap; gap: 6px;">
+            <form method="get" style="display: flex; gap: 6px; align-items: center;">
+                <select name="month" onchange="this.form.submit()" style="padding: 4px 6px; font-size: 13px;">
                     {% for m in range(1, 13) %}
                     <option value="{{ m }}" {% if m == selected_month %}selected{% endif %}>{{ "%02d"|format(m) }}</option>
                     {% endfor %}
                 </select>
-                <select name="year" onchange="this.form.submit()">
+                <select name="year" onchange="this.form.submit()" style="padding: 4px 6px; font-size: 13px;">
                     {% for y in years %}
                     <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
                     {% endfor %}
                 </select>
-                <label style="display: flex; align-items: center; gap: 4px; font-size: 13px; cursor: pointer;">
+                <label style="display: flex; align-items: center; gap: 4px; font-size: 12px; cursor: pointer;">
                     <input type="checkbox" name="show_zero" value="1" {% if show_zero %}checked{% endif %} onchange="this.form.submit()">
-                    הצג גם ערכים 0
+                    הצג 0
                 </label>
             </form>
+            <button onclick="showLegend()" style="padding: 4px 10px; font-size: 12px; background: #6c757d;">מקרא סמלים</button>
+            <a href="/summary?year={{ selected_year }}&month={{ selected_month }}" style="text-decoration: none; padding: 4px 10px; font-size: 12px; border: 1px solid #ccc; border-radius: 4px; color: #333;">חזרה לסיכום</a>
         </div>
     </div>
 
-    <!-- בחירת מפעל והורדה -->
-    <div style="margin: 20px 0; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px;">
-        <div style="color: white; margin-bottom: 12px;">
-            <strong style="font-size: 18px;">🏭 ייצוא לפי מפעל</strong>
-            <div style="font-size: 13px; opacity: 0.9;">בחר מפעל והורד קובץ גשר לכל העובדים במפעל</div>
-        </div>
+    <!-- ייצוא לפי מפעל -->
+    <div style="margin: 15px 0; padding: 15px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 8px;">
         <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center;">
+            <span style="color: white; font-weight: bold;">ייצוא כל המפעל:</span>
             {% for emp in employers %}
-            <a href="/export/gesher?year={{ selected_year }}&month={{ selected_month }}&company={{ emp.code }}" 
-               style="background: white; color: #667eea; text-decoration: none; padding: 12px 24px; border-radius: 8px; font-weight: bold; display: flex; flex-direction: column; align-items: center; min-width: 140px;">
-                <span style="font-size: 24px;">📥</span>
-                <span>{{ emp.name }}</span>
-                <span style="font-size: 12px; opacity: 0.7;">קוד {{ emp.code }}</span>
+            <a href="/export/gesher?year={{ selected_year }}&month={{ selected_month }}&company={{ emp.code }}"
+               style="background: white; color: #667eea; text-decoration: none; padding: 8px 16px; border-radius: 6px; font-weight: bold; font-size: 13px;">
+                {{ emp.name }} ({{ emp.code }})
             </a>
             {% endfor %}
         </div>
     </div>
-    
-    <div style="margin-bottom: 20px;">
-        <a href="/summary?year={{ selected_year }}&month={{ selected_month }}" class="button" style="text-decoration: none; padding: 8px 16px;">
-            חזרה לסיכום
-        </a>
+
+    {% if preview %}
+    <!-- חיפוש ובחירה -->
+    <div style="margin-bottom: 10px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+        <input type="text" id="searchBox" class="search-box" placeholder="חיפוש שם או קוד..." oninput="filterTable()">
+        <span id="filterCount" style="font-size: 12px; color: #666;"></span>
+        <div style="margin-right: auto;"></div>
+        <button onclick="selectAll(true)" style="padding: 4px 10px; font-size: 12px;">בחר הכל</button>
+        <button onclick="selectAll(false)" style="padding: 4px 10px; font-size: 12px; background: #6c757d;">בטל בחירה</button>
+        <button onclick="exportSelected()" class="download-btn" style="padding: 6px 12px;">ייצוא נבחרים</button>
     </div>
 
-    <!-- מקרא קודים -->
-    <div class="legend">
-        <strong>קודי ייצוא:</strong>
-        {% for symbol, (key, vtype, display_name) in export_codes.items() %}
-        <div class="legend-item">
-            <span class="code-badge type-{{ vtype }}">{{ symbol }}</span>
-            <span>{{ display_name }}</span>
-        </div>
-        {% endfor %}
-    </div>
-
-    <!-- טבלת תצוגה מקדימה -->
-    <div style="overflow-x: auto;">
-        <table class="export-table">
-            <thead>
+    <!-- טבלה קומפקטית -->
+    <div style="overflow-x: auto; overflow-y: auto; max-height: 70vh;">
+        <table class="export-table" id="exportTable">
+            <thead style="position: sticky; top: 0; z-index: 10;">
                 <tr>
-                    <th style="text-align: right;">עובד</th>
-                    <th>קוד מירב</th>
-                    <th>סמל</th>
-                    <th>שדה</th>
-                    <th>סוג</th>
-                    <th>ערך</th>
+                    <th class="checkbox-cell"><input type="checkbox" id="selectAllCheckbox" onchange="selectAll(this.checked)"></th>
+                    <th style="position: sticky; right: 0; top: 0; background: #f2f4f7; z-index: 12; border-left: 2px solid #ddd; min-width: 120px;">עובד</th>
+                    <th style="min-width: 60px;">קוד</th>
+                    <th></th>
+                    {% for symbol, (key, vtype, display_name) in export_codes.items() %}
+                    <th style="min-width: 50px;">{{ symbol }}<div>{{ display_name[:8] }}</div></th>
+                    {% endfor %}
+                    <th style="min-width: 60px;">הורדה</th>
                 </tr>
             </thead>
             <tbody>
                 {% for person in preview %}
-                <tr class="person-row">
-                    <td style="text-align: right;" rowspan="{{ person.lines|length + 1 }}">{{ person.name }}</td>
-                    <td rowspan="{{ person.lines|length + 1 }}">{{ person.meirav_code }}</td>
-                    <td colspan="4"></td>
-                </tr>
-                {% for line in person.lines %}
-                <tr class="symbol-row">
-                    <td><span class="code-badge">{{ line.symbol }}</span></td>
-                    <td>{{ line.display_name }}</td>
-                    <td>
-                        {% if 'hours' in line.type %}שעות
-                        {% elif line.type == 'money' %}₪
-                        {% elif line.type == 'days' or line.type == 'days_with_total_hours' %}ימים
-                        {% elif line.type == 'standby_with_rate' %}כוננויות
-                        {% else %}יחידות{% endif %}
+                <!-- שורת כמות -->
+                <tr class="qty-row" data-person-id="{{ person.person_id }}">
+                    <td class="checkbox-cell" rowspan="2">
+                        <input type="checkbox" class="person-checkbox" value="{{ person.person_id }}" data-name="{{ person.name }}">
                     </td>
+                    <td class="name-cell" rowspan="2">
+                        <a href="/guide/{{ person.person_id }}?year={{ selected_year }}&month={{ selected_month }}"
+                           style="text-decoration: none; color: #0969da;">{{ person.name }}</a>
+                    </td>
+                    <td rowspan="2" style="font-family: monospace;">{{ person.meirav_code }}</td>
+                    <td style="font-size: 10px; color: #888;">כמות</td>
+                    {% for symbol, (key, vtype, display_name) in export_codes.items() %}
                     <td>
-                        {% if line.type == 'money' %}
-                            {{ "%.2f"|format(line.payment) }} ₪
-                        {% else %}
-                            {{ "%.2f"|format(line.quantity) }}
-                            {% if line.payment > 0 %}
-                                <span style="color: #888; font-size: 0.85em;">(תעריף: {{ "%.2f"|format(line.payment) }})</span>
+                        {% set found = namespace(qty=0) %}
+                        {% for line in person.lines %}
+                            {% if line.symbol == symbol %}
+                                {% set found.qty = line.quantity %}
                             {% endif %}
+                        {% endfor %}
+                        {% if found.qty > 0 %}
+                            {{ "%.1f"|format(found.qty) }}
+                        {% else %}
+                            <span style="color: #ddd;">-</span>
                         {% endif %}
                     </td>
+                    {% endfor %}
+                    <td rowspan="2">
+                        <a href="/export/gesher/person/{{ person.person_id }}?year={{ selected_year }}&month={{ selected_month }}"
+                           class="download-btn" title="הורד קובץ גשר">📥</a>
+                    </td>
                 </tr>
-                {% endfor %}
+                <!-- שורת תעריף -->
+                <tr class="rate-row">
+                    <td style="font-size: 10px; color: #888;">תעריף</td>
+                    {% for symbol, (key, vtype, display_name) in export_codes.items() %}
+                    <td>
+                        {% set found = namespace(rate=0) %}
+                        {% for line in person.lines %}
+                            {% if line.symbol == symbol %}
+                                {% set found.rate = line.payment %}
+                            {% endif %}
+                        {% endfor %}
+                        {% if found.rate > 0 %}
+                            {{ "%.1f"|format(found.rate) }}
+                        {% else %}
+                            <span style="color: #ddd;">-</span>
+                        {% endif %}
+                    </td>
+                    {% endfor %}
+                </tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
-
-    {% if not preview %}
+    {% else %}
     <div style="text-align: center; padding: 40px; color: #666;">
         <h3>אין נתונים לייצוא</h3>
         <p>לא נמצאו עובדים עם קוד מירב ונתוני שכר לחודש זה.</p>
     </div>
     {% endif %}
 </div>
+
+<!-- Modal מקרא סמלים -->
+<div id="legendModal" class="modal-overlay" onclick="if(event.target===this)hideLegend()">
+    <div class="modal-content">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h3 style="margin: 0;">מקרא סמלים</h3>
+            <button onclick="hideLegend()" style="background: none; border: none; font-size: 20px; cursor: pointer;">&times;</button>
+        </div>
+        <table class="legend-table">
+            <thead>
+                <tr>
+                    <th>קוד</th>
+                    <th>תיאור</th>
+                    <th>שימושים</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for symbol, (key, vtype, display_name) in export_codes.items() %}
+                {% set usage_count = namespace(count=0) %}
+                {% for person in preview %}
+                    {% for line in person.lines %}
+                        {% if line.symbol == symbol and line.quantity > 0 %}
+                            {% set usage_count.count = usage_count.count + 1 %}
+                        {% endif %}
+                    {% endfor %}
+                {% endfor %}
+                <tr>
+                    <td><span class="code-badge">{{ symbol }}</span></td>
+                    <td>{{ display_name }}</td>
+                    <td style="text-align: center;">{{ usage_count.count }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+function selectAll(checked) {
+    // Only select visible (not filtered) checkboxes
+    document.querySelectorAll('.qty-row:not(.hidden) .person-checkbox').forEach(cb => cb.checked = checked);
+    document.getElementById('selectAllCheckbox').checked = checked;
+}
+
+function exportSelected() {
+    const selected = [];
+    document.querySelectorAll('.person-checkbox:checked').forEach(cb => {
+        selected.push(cb.value);
+    });
+
+    if (selected.length === 0) {
+        alert('יש לבחור לפחות עובד אחד');
+        return;
+    }
+
+    // ייצוא כל עובד שנבחר (פותח הורדות מרובות)
+    selected.forEach(personId => {
+        const url = `/export/gesher/person/${personId}?year={{ selected_year }}&month={{ selected_month }}`;
+        window.open(url, '_blank');
+    });
+}
+
+function filterTable() {
+    const searchText = document.getElementById('searchBox').value.toLowerCase().trim();
+    const rows = document.querySelectorAll('.qty-row');
+    let visibleCount = 0;
+
+    rows.forEach(row => {
+        const name = row.querySelector('.name-cell a')?.textContent.toLowerCase() || '';
+        const code = row.querySelector('td:nth-child(3)')?.textContent.toLowerCase() || '';
+        const rateRow = row.nextElementSibling;
+
+        if (searchText === '' || name.includes(searchText) || code.includes(searchText)) {
+            row.classList.remove('hidden');
+            if (rateRow) rateRow.classList.remove('hidden');
+            visibleCount++;
+        } else {
+            row.classList.add('hidden');
+            if (rateRow) rateRow.classList.add('hidden');
+        }
+    });
+
+    const countEl = document.getElementById('filterCount');
+    if (searchText) {
+        countEl.textContent = `נמצאו ${visibleCount} מתוך {{ preview|length }}`;
+    } else {
+        countEl.textContent = '';
+    }
+}
+
+function showLegend() {
+    document.getElementById('legendModal').classList.add('show');
+}
+
+function hideLegend() {
+    document.getElementById('legendModal').classList.remove('show');
+}
+
+// Close modal with Escape key
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') hideLegend();
+});
+</script>
 {% endblock %}
