@@ -26,9 +26,11 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
     
     # Fetch reports
     reports = conn.execute("""
-        SELECT tr.*, 
-               st.name AS shift_name, 
+        SELECT tr.*,
+               st.name AS shift_name,
                st.color AS shift_color,
+               st.for_friday_eve,
+               st.for_shabbat_holiday,
                ap.name AS apartment_name,
                ap.apartment_type_id,
                p.is_married,
@@ -95,7 +97,65 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         shift_name_str = (r["shift_name"] or "")
         is_sick_report = ("מחלה" in shift_name_str)
         is_vacation_report = ("חופשה" in shift_name_str)
-        
+
+        # משמרות תגבור - משתמשים בסגמנטים המוגדרים ישירות (לא לפי שעות דיווח)
+        # רק משמרות עם "תגבור" בשם מקבלות התייחסות מיוחדת זו
+        is_fixed_segments_shift = "תגבור" in shift_name_str
+
+        # אם זו משמרת תגבור - מוסיפים את הסגמנטים ישירות בלי לחשב חפיפה עם שעות הדיווח
+        if is_fixed_segments_shift and seg_list:
+            CUTOFF = 480  # 08:00
+            display_date = r_date  # יום הדיווח
+            day_key = display_date.strftime("%d/%m/%Y")
+            entry = daily_map.setdefault(day_key, {"buckets": {}, "shifts": set(), "segments": [], "is_fixed_segments": False})
+            entry["is_fixed_segments"] = True  # סימון שזו משמרת קבועה
+            if r["shift_name"]:
+                entry["shifts"].add(r["shift_name"])
+
+            for seg in seg_list:
+                seg_start, seg_end = span_minutes(seg["start_time"], seg["end_time"])
+                duration = seg_end - seg_start
+
+                # קביעת סוג אפקטיבי
+                if is_sick_report:
+                    effective_seg_type = "sick"
+                elif is_vacation_report:
+                    effective_seg_type = "vacation"
+                else:
+                    effective_seg_type = seg["segment_type"]
+
+                # קביעת תווית
+                if effective_seg_type == "standby":
+                    label = "כוננות"
+                elif effective_seg_type == "vacation":
+                    label = "חופשה"
+                elif effective_seg_type == "sick":
+                    label = "מחלה"
+                elif seg["wage_percent"] == 100:
+                    label = "100%"
+                elif seg["wage_percent"] == 125:
+                    label = "125%"
+                elif seg["wage_percent"] == 150:
+                    label = "150%"
+                elif seg["wage_percent"] == 175:
+                    label = "175%"
+                elif seg["wage_percent"] == 200:
+                    label = "200%"
+                else:
+                    label = f"{seg['wage_percent']}%"
+
+                entry["buckets"].setdefault(label, 0)
+                entry["buckets"][label] += duration
+
+                segment_id = seg.get("id")
+                apartment_type_id = r.get("apartment_type_id")
+                is_married = r.get("is_married")
+                apartment_name = r.get("apartment_name", "")
+
+                entry["segments"].append((seg_start, seg_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, r_date))
+
+            continue  # דלג על העיבוד הרגיל עבור משמרת זו
+
         for p_date, p_start, p_end in parts:
             # Split segments crossing 08:00 cutoff
             CUTOFF = 480  # 08:00
@@ -123,7 +183,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     continue
 
                 day_key = display_date.strftime("%d/%m/%Y")
-                entry = daily_map.setdefault(day_key, {"buckets": {}, "shifts": set(), "segments": []})
+                entry = daily_map.setdefault(day_key, {"buckets": {}, "shifts": set(), "segments": [], "is_fixed_segments": False})
                 if r["shift_name"]:
                     entry["shifts"].add(r["shift_name"])
                     
@@ -261,13 +321,22 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
     # Track carryover minutes from previous day's chain ending at 08:00
     # This is used when a work chain continues from 06:30-08:00 to 08:00-...
     prev_day_carryover_minutes = 0
+    prev_day_date = None  # לעקוב אחרי התאריך הקודם
 
     for day, entry in sorted(daily_map.items()):
         buckets = entry["buckets"]
         shift_names = sorted(entry["shifts"])
-        
+        is_fixed_segments = entry.get("is_fixed_segments", False)
+
         day_parts = day.split("/")
         day_date = datetime(int(day_parts[2]), int(day_parts[1]), int(day_parts[0]), tzinfo=LOCAL_TZ).date()
+
+        # בדיקה אם הימים רציפים - אם לא, לאפס carryover
+        if prev_day_date is not None:
+            days_diff = (day_date - prev_day_date).days
+            if days_diff != 1:
+                # הימים לא רציפים - אין carryover
+                prev_day_carryover_minutes = 0
         
         # Prepare Hebrew Date and Day Name
         days_map = {0: "שני", 1: "שלישי", 2: "רביעי", 3: "חמישי", 4: "שישי", 5: "שבת", 6: "ראשון"}
@@ -402,7 +471,78 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         
         # Calculate Chains
         chains_detail = []
-        
+
+        # משמרת קבועה (ערב שבת/חג) - לא מחשבים רצף, משתמשים באחוזים הקבועים מהסגמנטים
+        if is_fixed_segments:
+            d_calc100 = 0; d_calc125 = 0; d_calc150 = 0; d_calc175 = 0; d_calc200 = 0
+            d_payment = 0; d_standby_pay = 0
+            chains = []
+            cancelled_standbys = []
+
+            for s, e, label, sid, apt_name, actual_date in work_segments:
+                duration = e - s
+                # חישוב לפי האחוז הקבוע
+                if "100%" in label:
+                    d_calc100 += duration
+                    pay = (duration / 60) * 1.0 * minimum_wage
+                elif "125%" in label:
+                    d_calc125 += duration
+                    pay = (duration / 60) * 1.25 * minimum_wage
+                elif "150%" in label:
+                    d_calc150 += duration
+                    pay = (duration / 60) * 1.5 * minimum_wage
+                elif "175%" in label:
+                    d_calc175 += duration
+                    pay = (duration / 60) * 1.75 * minimum_wage
+                elif "200%" in label:
+                    d_calc200 += duration
+                    pay = (duration / 60) * 2.0 * minimum_wage
+                else:
+                    d_calc100 += duration
+                    pay = (duration / 60) * 1.0 * minimum_wage
+
+                d_payment += pay
+
+                start_str = f"{s // 60 % 24:02d}:{s % 60:02d}"
+                end_str = f"{e // 60 % 24:02d}:{e % 60:02d}"
+
+                chains.append({
+                    "start_time": start_str,
+                    "end_time": end_str,
+                    "total_minutes": duration,
+                    "payment": pay,
+                    "calc100": duration if "100%" in label else 0,
+                    "calc125": duration if "125%" in label else 0,
+                    "calc150": duration if "150%" in label else 0,
+                    "calc175": duration if "175%" in label else 0,
+                    "calc200": duration if "200%" in label else 0,
+                    "type": "work",
+                    "apartment_name": apt_name or "",
+                    "segments": [(start_str, end_str, label)],
+                    "break_reason": "",
+                    "from_prev_day": False,
+                })
+
+            total_minutes = sum(w[1]-w[0] for w in work_segments)
+
+            daily_segments.append({
+                "day": day,
+                "day_name": day_name_he,
+                "hebrew_date": hebrew_date_str,
+                "date_obj": day_date,
+                "payment": d_payment,
+                "standby_payment": d_standby_pay,
+                "calc100": d_calc100, "calc125": d_calc125, "calc150": d_calc150, "calc175": d_calc175, "calc200": d_calc200,
+                "shift_names": shift_names,
+                "has_work": len(work_segments) > 0,
+                "total_minutes": total_minutes,
+                "total_minutes_no_standby": total_minutes,
+                "buckets": buckets,
+                "chains": chains,
+                "cancelled_standbys": cancelled_standbys,
+            })
+            continue  # דלג לסיבוב הבא - כבר סיימנו את היום הזה
+
         # Merge all events for processing
         all_events = []
         for s, e, l, sid, apt_name, actual_date in work_segments:
@@ -413,7 +553,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             all_events.append({"start": s, "end": e, "type": "vacation", "label": "חופשה", "actual_date": actual_date or day_date})
         for s, e, actual_date in sick_segments:
             all_events.append({"start": s, "end": e, "type": "sick", "label": "מחלה", "actual_date": actual_date or day_date})
-            
+
         all_events.sort(key=lambda x: x["start"])
 
         # Build a set of work segment boundaries for quick lookup
@@ -693,6 +833,9 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             "chains": chains,
             "cancelled_standbys": cancelled_standbys,
         })
+
+        # עדכון התאריך הקודם לסיבוב הבא
+        prev_day_date = day_date
 
     return daily_segments, reports[0]["person_name"] if reports else ""
 

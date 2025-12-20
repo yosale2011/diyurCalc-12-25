@@ -348,53 +348,57 @@ def is_shabbat_time(
 ) -> bool:
     """
     Check if a specific time is within Shabbat hours.
-    
+
     Args:
         day_of_week: Python weekday (0=Monday, 4=Friday, 5=Saturday)
-        minute_in_day: Minutes from midnight (0-1439)
+        minute_in_day: Minutes from midnight (can be normalized >1440 for times after midnight)
         shift_id: The shift type ID (not used anymore - all shifts use DB times)
         current_date: The current date being checked
         shabbat_cache: Cache of Shabbat times from DB
-    
+
     Returns:
         True if the time is within Shabbat hours
     """
+    # נרמול זמן - אם מעל 1440, זה בוקר של היום הבא
+    # לדוגמה: 1830 = 06:30 בבוקר (390 + 1440)
+    actual_minute = minute_in_day % MINUTES_PER_DAY  # המרה ל-0-1439
+
     # Check if it's Friday or Saturday
     if day_of_week not in (FRIDAY, SATURDAY):
         return False
-    
+
     # Find the Saturday for this shabbat (cache is keyed by Saturday date)
     if day_of_week == FRIDAY:
         target_saturday = current_date + timedelta(days=1)
     else:  # SATURDAY
         target_saturday = current_date
-    
+
     saturday_str = target_saturday.strftime("%Y-%m-%d")
     shabbat_data = shabbat_cache.get(saturday_str)
-    
+
     # Use DB times if available
     if shabbat_data:
         try:
             eh, em = map(int, shabbat_data["enter"].split(":"))
             enter_minutes = eh * MINUTES_PER_HOUR + em
-            
+
             xh, xm = map(int, shabbat_data["exit"].split(":"))
             exit_minutes = xh * MINUTES_PER_HOUR + xm
-            
-            if day_of_week == FRIDAY and minute_in_day >= enter_minutes:
+
+            if day_of_week == FRIDAY and actual_minute >= enter_minutes:
                 return True
-            if day_of_week == SATURDAY and minute_in_day < exit_minutes:
+            if day_of_week == SATURDAY and actual_minute < exit_minutes:
                 return True
             return False
         except (ValueError, KeyError, AttributeError):
             pass
 
     # Fallback: use default Shabbat times
-    if day_of_week == FRIDAY and minute_in_day >= SHABBAT_ENTER_DEFAULT:
+    if day_of_week == FRIDAY and actual_minute >= SHABBAT_ENTER_DEFAULT:
         return True
-    if day_of_week == SATURDAY and minute_in_day < SHABBAT_EXIT_DEFAULT:
+    if day_of_week == SATURDAY and actual_minute < SHABBAT_EXIT_DEFAULT:
         return True
-    
+
     return False
 
 
@@ -480,6 +484,52 @@ def _build_daily_map(
         is_vacation_report = (work_type == "sick_vacation" or
                              "חופשה" in shift_name or
                              "מחלה" in shift_name)
+
+        # משמרות תגבור - משתמשים בסגמנטים המוגדרים ישירות (לא לפי שעות דיווח)
+        is_tagbur_shift = "תגבור" in shift_name
+
+        # אם זו משמרת תגבור - מוסיפים את הסגמנטים ישירות בלי לחשב חפיפה עם שעות הדיווח
+        if is_tagbur_shift and seg_list:
+            display_date = r_date  # יום הדיווח
+            day_key = display_date.strftime("%d/%m/%Y")
+            entry = daily_map.setdefault(day_key, {"segments": [], "date": display_date})
+            entry["is_tagbur"] = True
+            if "tagbur_wages" not in entry or not entry["tagbur_wages"]:
+                entry["tagbur_wages"] = {"calc100": 0, "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0}
+
+            for seg in seg_list:
+                seg_start, seg_end = span_minutes(seg["start_time"], seg["end_time"])
+                duration = seg_end - seg_start
+
+                effective_seg_type = seg["segment_type"]
+                if is_vacation_report:
+                    effective_seg_type = "vacation"
+
+                segment_id = seg.get("id")
+                apartment_type_id = r.get("apartment_type_id")
+                is_married = r.get("is_married")
+                wage_percent = seg.get("wage_percent", 100)
+
+                # חישוב לפי אחוז קבוע
+                if wage_percent == 100:
+                    entry["tagbur_wages"]["calc100"] += duration
+                elif wage_percent == 125:
+                    entry["tagbur_wages"]["calc125"] += duration
+                elif wage_percent == 150:
+                    entry["tagbur_wages"]["calc150"] += duration
+                elif wage_percent == 175:
+                    entry["tagbur_wages"]["calc175"] += duration
+                elif wage_percent == 200:
+                    entry["tagbur_wages"]["calc200"] += duration
+                else:
+                    entry["tagbur_wages"]["calc100"] += duration
+
+                # שמירה באותו מבנה כמו סגמנטים רגילים: (start, end, type, shift_id, seg_id, apt_type, married)
+                entry["segments"].append((
+                    seg_start, seg_end, effective_seg_type,
+                    r["shift_type_id"], segment_id, apartment_type_id, is_married
+                ))
+            continue  # דלג על העיבוד הרגיל עבור משמרת זו
 
         for p_date, p_start, p_end in parts:
             # פיצול מקטעים שחוצים את גבול 08:00
@@ -710,13 +760,21 @@ def _calculate_chain_wages(
                 block_abs_start = current_abs_minute
                 block_abs_end = current_abs_minute + block_size
 
+                # נרמול זמנים - זמנים מעל 1440 הם בבוקר (אחרי חצות)
+                # לדוגמה: 1830 = 06:30 בבוקר = לפני כניסת שבת
+                actual_block_start = block_abs_start % MINUTES_PER_DAY
+                actual_block_end = block_abs_end % MINUTES_PER_DAY
+                # אם הסגמנט חוצה חצות, end יהיה קטן מ-start
+                if actual_block_end <= actual_block_start and block_abs_end > block_abs_start:
+                    actual_block_end = block_abs_end % MINUTES_PER_DAY or MINUTES_PER_DAY
+
                 # Adjust for day offset (if segment crosses midnight)
                 day_offset = 0
                 if weekday == SATURDAY:
                     day_offset = MINUTES_PER_DAY
 
-                abs_start_from_fri = block_abs_start + day_offset
-                abs_end_from_fri = block_abs_end + day_offset
+                abs_start_from_fri = actual_block_start + day_offset
+                abs_end_from_fri = actual_block_end + day_offset
 
                 # Helper to add segment detail
                 def add_segment_detail(start_min, end_min, rate_label, is_shabbat):
@@ -903,9 +961,39 @@ def _process_daily_map(
     # Track carryover minutes from previous day's chain ending at 08:00
     prev_day_carryover_minutes = 0
     prev_day_ended_at_midnight = False
+    prev_day_date = None  # לעקוב אחרי התאריך הקודם
 
     for day_key, entry in sorted(daily_map.items()):
         day_date = entry["date"]
+
+        # בדיקה אם הימים רציפים - אם לא, לאפס carryover
+        if prev_day_date is not None:
+            days_diff = (day_date - prev_day_date).days
+            if days_diff != 1:
+                # הימים לא רציפים - אין carryover
+                prev_day_carryover_minutes = 0
+                prev_day_ended_at_midnight = False
+
+        # משמרת תגבור - משתמשים באחוזים הקבועים מהסגמנטים, לא מחשבים רצף
+        if entry.get("is_tagbur") and entry.get("tagbur_wages"):
+            tagbur = entry["tagbur_wages"]
+            totals["calc100"] += tagbur.get("calc100", 0)
+            totals["calc125"] += tagbur.get("calc125", 0)
+            totals["calc150"] += tagbur.get("calc150", 0)
+            totals["calc175"] += tagbur.get("calc175", 0)
+            totals["calc200"] += tagbur.get("calc200", 0)
+
+            total_day_minutes = sum(tagbur.values())
+            totals["total_hours"] += total_day_minutes
+
+            if total_day_minutes > 0:
+                work_days_set.add(day_date)
+
+            # אפס carryover כי משמרת תגבור היא עצמאית
+            prev_day_carryover_minutes = 0
+            prev_day_ended_at_midnight = False
+            prev_day_date = day_date
+            continue
 
         # הפרדת מקטעים לסוגים
         work_segments = []
@@ -1079,16 +1167,9 @@ def _process_daily_map(
                     should_break = True
                 elif last_end is not None:
                     # Calculate gap considering normalized times
-                    # If seg_start is less than WORK_DAY_CUTOFF (480), it's from previous day and normalized
-                    if seg_start < WORK_DAY_CUTOFF and last_end >= MINUTES_PER_DAY:
-                        # Both segments are normalized (after midnight)
-                        gap = seg_start - last_end
-                    elif seg_start < WORK_DAY_CUTOFF and last_end < WORK_DAY_CUTOFF:
-                        # Both segments are before 08:00 (normalized)
-                        gap = seg_start - last_end
-                    else:
-                        # Regular gap calculation
-                        gap = seg_start - last_end
+                    # Normalized times (after midnight, before 08:00) have 1440 added
+                    # So they are >= 1440, not < 480
+                    gap = seg_start - last_end
                     if gap > BREAK_THRESHOLD_MINUTES:
                         should_break = True
 
@@ -1150,6 +1231,9 @@ def _process_daily_map(
 
         if vacation_segments:
             vacation_days_set.add(day_date)
+
+        # עדכון התאריך הקודם לסיבוב הבא
+        prev_day_date = day_date
 
     return totals, work_days_set, vacation_days_set
 

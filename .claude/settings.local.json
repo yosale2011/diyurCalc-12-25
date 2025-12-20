@@ -5,7 +5,8 @@
       "Bash(dir:*)",
       "Bash(git -C \"f:\\\\DiyurClock\\\\103\\\\DiyurCalc\" log --oneline -20)",
       "Bash(git checkout:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(iconv:*)"
     ],
     "deny": [],
     "ask": []
