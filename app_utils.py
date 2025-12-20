@@ -348,30 +348,57 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             else:
                 merged_standbys.append(sb)
 
-        # Standby Cancellation Logic - now checks MERGED standbys
+        # Standby Trim Logic - subtract work time from standby instead of cancelling
         cancelled_standbys = []
-        valid_standby = []
+        trimmed_standbys = []
         for sb in merged_standbys:
-            sb_start, sb_end = sb[0], sb[1]
+            sb_start, sb_end, seg_id, apt_type, married, actual_date = sb
             duration = sb_end - sb_start
             if duration <= 0: continue
-            
+
+            # Calculate total overlap with work
             total_overlap = 0
             for w in work_segments:
                 total_overlap += overlap_minutes(sb_start, sb_end, w[0], w[1])
-            
-            ratio = total_overlap / duration
+
+            ratio = total_overlap / duration if duration > 0 else 0
+
             if ratio >= STANDBY_CANCEL_OVERLAP_THRESHOLD:
-                # Only show cancellation if it starts after 00:00 (to avoid double counting tails)
+                # Cancel standby completely if >70% overlap
                 if sb_start % MINUTES_PER_DAY > 0:
                     cancelled_standbys.append({
-                        "start": sb_start % MINUTES_PER_DAY, 
-                        "end": sb_end % MINUTES_PER_DAY, 
+                        "start": sb_start % MINUTES_PER_DAY,
+                        "end": sb_end % MINUTES_PER_DAY,
                         "reason": f"חפיפה ({int(ratio*100)}%)"
                     })
             else:
-                valid_standby.append(sb)
-        standby_segments = valid_standby
+                # Trim: subtract work segments from standby
+                remaining_parts = [(sb_start, sb_end)]
+
+                for w in work_segments:
+                    w_start, w_end = w[0], w[1]
+                    new_parts = []
+                    for r_start, r_end in remaining_parts:
+                        inter_start = max(r_start, w_start)
+                        inter_end = min(r_end, w_end)
+
+                        if inter_start < inter_end:
+                            # There is overlap - subtract it
+                            if r_start < inter_start:
+                                new_parts.append((r_start, inter_start))
+                            if inter_end < r_end:
+                                new_parts.append((inter_end, r_end))
+                        else:
+                            # No overlap - keep as is
+                            new_parts.append((r_start, r_end))
+                    remaining_parts = new_parts
+
+                # Add trimmed parts
+                for r_start, r_end in remaining_parts:
+                    if r_end > r_start:
+                        trimmed_standbys.append((r_start, r_end, seg_id, apt_type, married, actual_date))
+
+        standby_segments = trimmed_standbys
         
         # Calculate Chains
         chains_detail = []
@@ -388,7 +415,12 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             all_events.append({"start": s, "end": e, "type": "sick", "label": "מחלה", "actual_date": actual_date or day_date})
             
         all_events.sort(key=lambda x: x["start"])
-        
+
+        # Build a set of work segment boundaries for quick lookup
+        # This helps determine if standby truly breaks the chain or if work continues through it
+        work_starts = {ws[0] for ws in work_segments}  # All work start times
+        work_ends = {ws[1] for ws in work_segments}    # All work end times
+
         # Process chains logic (Simplified version of guide_view logic for brevity, 
         # but needs to match calculations)
         # ... copying the chain processing logic is complex.
@@ -534,8 +566,18 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             break_reason = ""
             if current_chain_segments:
                 if is_special:
-                    should_break = True
-                    break_reason = etype
+                    # כוננות שוברת רצף רק אם אין עבודה שחופפת לה או ממשיכה אחריה
+                    # בדיקה: האם יש עבודה שמסתיימת אחרי תחילת הכוננות או מתחילה לפני סוף הכוננות?
+                    standby_overlaps_work = any(
+                        ws[0] < end and ws[1] > start  # עבודה חופפת לכוננות
+                        for ws in work_segments
+                    )
+                    if standby_overlaps_work:
+                        # יש עבודה שחופפת לכוננות - לא לשבור רצף
+                        should_break = False
+                    else:
+                        should_break = True
+                        break_reason = etype
                 elif last_end is not None and (start - last_end) > BREAK_THRESHOLD_MINUTES:
                     should_break = True
                     break_reason = f"הפסקה ({start - last_end} דקות)"
@@ -620,6 +662,19 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         total_minutes = sum(w[1]-w[0] for w in work_segments)
         for sb in standby_segments:
             total_minutes += sb[1] - sb[0]
+
+        # מיון chains לפי זמן התחלה (עם טיפול בזמנים מנורמלים)
+        def chain_sort_key(c):
+            # המרת זמן התחלה לדקות (0-1440 לזמנים רגילים, 1440+ לזמנים מנורמלים)
+            t = c.get("start_time", "00:00")
+            h, m = map(int, t.split(":"))
+            minutes = h * 60 + m
+            # אם from_prev_day (אחרי חצות), נוסיף 1440
+            if c.get("from_prev_day"):
+                minutes += MINUTES_PER_DAY
+            return minutes
+
+        chains.sort(key=chain_sort_key)
 
         daily_segments.append({
             "day": day,

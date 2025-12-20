@@ -471,8 +471,9 @@ def _build_daily_map(
 
         seg_list = segments_by_shift.get(r["shift_type_id"], [])
         if not seg_list:
+            # משמרת ללא סגמנטים מוגדרים - wage_percent=0 מסמן "חשב לפי רצף"
             seg_list = [{"start_time": r["start_time"], "end_time": r["end_time"],
-                        "wage_percent": 100, "segment_type": "work", "id": None}]
+                        "wage_percent": 0, "segment_type": "work", "id": None}]
 
         work_type = r.get("work_type")
         shift_name = r.get("shift_name") or ""
@@ -1043,7 +1044,7 @@ def _process_daily_map(
         paid_standby_ids = set()
 
         def close_chain(minutes_offset=0):
-            nonlocal current_chain_segments, day_wages, last_chain_total, last_chain_ended_at_0800
+            nonlocal current_chain_segments, day_wages, last_chain_total, last_chain_ended_at_0800, prev_day_ended_at_midnight
             if not current_chain_segments:
                 return
 
@@ -1075,14 +1076,7 @@ def _process_daily_map(
             should_break = False
             if current_chain_segments:
                 if is_special:
-                    # כוננות/חופשה שוברת רצף רק אם אין עבודה שממשיכה אחריה
-                    # אם יש עבודה שמתחילה בדיוק כשהכוננות נגמרת, הרצף נמשך
-                    work_continues_after = seg_end in work_starts
-                    if work_continues_after:
-                        # יש עבודה שמתחילה כשהכוננות נגמרת - לא לשבור רצף
-                        should_break = False
-                    else:
-                        should_break = True
+                    should_break = True
                 elif last_end is not None:
                     # Calculate gap considering normalized times
                     # If seg_start is less than WORK_DAY_CUTOFF (480), it's from previous day and normalized
