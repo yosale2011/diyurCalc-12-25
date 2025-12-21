@@ -266,7 +266,7 @@
                 {% set usage_count = namespace(count=0) %}
                 {% for person in preview %}
                     {% for line in person.lines %}
-                        {% if line.symbol == symbol and line.quantity > 0 %}
+                        {% if line.symbol == symbol and ((line.type == 'money' and line.payment > 0) or (line.type != 'money' and line.quantity > 0)) %}
                             {% set usage_count.count = usage_count.count + 1 %}
                         {% endif %}
                     {% endfor %}
