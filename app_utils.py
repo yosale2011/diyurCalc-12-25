@@ -202,8 +202,12 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
 
             for s_start, s_end in sub_parts:
                 # Assign to workday and normalize times
-                if s_end <= CUTOFF:
-                    # Belongs to previous day's workday
+                # דיווח ששעת הסיום שלו לפני 08:00 שייך ליום העבודה הקודם
+                # אבל רק אם זה המשך של משמרת (לא דיווח עצמאי שמתחיל בחצות)
+                # דיווח עצמאי = הדיווח המקורי התחיל בחצות (00:00) ביום הנוכחי
+                is_standalone_midnight_shift = (s_start == 0 and p_date == r_date and rep_start_orig == 0)
+                if s_end <= CUTOFF and not is_standalone_midnight_shift:
+                    # Belongs to previous day's workday (continuation of shift)
                     display_date = p_date - timedelta(days=1)
                     norm_start = s_start + MINUTES_PER_DAY
                     norm_end = s_end + MINUTES_PER_DAY
