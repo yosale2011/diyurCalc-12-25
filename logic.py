@@ -1540,7 +1540,7 @@ def calculate_person_monthly_totals(
     
     for pc in payment_comps:
         amount = (pc["total_amount"] or 0) / 100
-        if pc["component_type_id"] == 2:
+        if pc["component_type_id"] == 2 or pc["component_type_id"] == 7:
             monthly_totals["travel"] += amount
         else:
             monthly_totals["extras"] += amount
@@ -1689,7 +1689,7 @@ def _calculate_totals_from_data(
     # רכיבי תשלום - תמיד (לא בתוך ה-if!)
     for pc in payment_comps:
         amount = (pc["total_amount"] or 0) / 100
-        if pc["component_type_id"] == 2:
+        if pc["component_type_id"] == 2 or pc["component_type_id"] == 7:
             monthly_totals["travel"] += amount
         else:
             monthly_totals["extras"] += amount
