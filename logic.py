@@ -1424,6 +1424,7 @@ def _calculate_totals_from_data(
         "calc100": 0, "calc125": 0, "calc150": 0, "calc150_shabbat": 0,
         "calc150_shabbat_100": 0, "calc150_shabbat_50": 0,
         "calc150_overtime": 0, "calc175": 0, "calc200": 0,
+        "calc_variable": 0,
         "vacation_minutes": 0, "vacation_payment": 0, "travel": 0, "extras": 0,
         "sick_days_accrued": 0, "vacation_days_accrued": 0
     }
@@ -1468,6 +1469,28 @@ def _calculate_totals_from_data(
                     "calc150_shabbat", "calc150_overtime", "calc150_shabbat_100",
                     "calc150_shabbat_50", "total_hours", "standby_payment", "vacation_minutes"]:
             monthly_totals[key] = totals[key]
+
+        # חישוב שעות בתעריף משתנה
+        # נחשב את כל הדקות של עבודה מדיווחים עם תעריף שונה משכר מינימום
+        # נשתמש ב-daily_map כדי לחשב רק את דקות העבודה (לא כוננות/חופשה)
+        # נבנה מפה של shift_id -> תעריף משתנה
+        variable_rate_shifts = set()
+        for r in reports:
+            shift_rate = r.get("shift_rate")
+            is_minimum_wage = r.get("shift_is_minimum_wage", True)
+            if shift_rate and not is_minimum_wage:
+                variable_rate_shifts.add(r.get("shift_type_id"))
+        
+        # נחשב את דקות העבודה מדיווחים עם תעריף משתנה
+        variable_rate_minutes = 0
+        for day_key, entry in daily_map.items():
+            for seg in entry.get("segments", []):
+                s_start, s_end, s_type, shift_id, seg_id, apt_type, is_married = seg
+                if s_type == "work" and shift_id in variable_rate_shifts:
+                    # זה סגמנט עבודה עם תעריף משתנה
+                    variable_rate_minutes += (s_end - s_start)
+        
+        monthly_totals["calc_variable"] = variable_rate_minutes
 
         monthly_totals["actual_work_days"] = len(work_days_set)
         monthly_totals["vacation_days_taken"] = len(vacation_days_set)
@@ -1528,6 +1551,8 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
     start_ts, end_ts = month_range_ts(year, month)
     cursor.execute("""
         SELECT tr.*, st.name as shift_name, 
+               st.rate AS shift_rate,
+               st.is_minimum_wage AS shift_is_minimum_wage,
                a.apartment_type_id,
                p.is_married
         FROM time_reports tr
