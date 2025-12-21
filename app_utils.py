@@ -719,7 +719,57 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     "effective_rate": effective_rate,
                 })
 
-            total_minutes = sum(w[1]-w[0] for w in work_segments)
+            # עיבוד סגמנטי חופשה
+            for s, e, actual_date in vacation_segments:
+                duration = e - s
+                pay = (duration / 60) * minimum_wage  # חופשה = 100% שכר מינימום
+                d_calc100 += duration
+                d_payment += pay
+
+                start_str = f"{s // 60 % 24:02d}:{s % 60:02d}"
+                end_str = f"{e // 60 % 24:02d}:{e % 60:02d}"
+
+                chains.append({
+                    "start_time": start_str,
+                    "end_time": end_str,
+                    "total_minutes": duration,
+                    "payment": pay,
+                    "calc100": duration,
+                    "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0,
+                    "type": "vacation",
+                    "apartment_name": "",
+                    "segments": [(start_str, end_str, "חופשה")],
+                    "break_reason": "",
+                    "from_prev_day": False,
+                    "effective_rate": minimum_wage,
+                })
+
+            # עיבוד סגמנטי מחלה
+            for s, e, actual_date in sick_segments:
+                duration = e - s
+                pay = (duration / 60) * minimum_wage  # מחלה = 100% שכר מינימום
+                d_calc100 += duration
+                d_payment += pay
+
+                start_str = f"{s // 60 % 24:02d}:{s % 60:02d}"
+                end_str = f"{e // 60 % 24:02d}:{e % 60:02d}"
+
+                chains.append({
+                    "start_time": start_str,
+                    "end_time": end_str,
+                    "total_minutes": duration,
+                    "payment": pay,
+                    "calc100": duration,
+                    "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0,
+                    "type": "sick",
+                    "apartment_name": "",
+                    "segments": [(start_str, end_str, "מחלה")],
+                    "break_reason": "",
+                    "from_prev_day": False,
+                    "effective_rate": minimum_wage,
+                })
+
+            total_minutes = sum(w[1]-w[0] for w in work_segments) + sum(v[1]-v[0] for v in vacation_segments) + sum(s[1]-s[0] for s in sick_segments)
 
             daily_segments.append({
                 "day": day,

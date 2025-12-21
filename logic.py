@@ -488,9 +488,12 @@ def _build_daily_map(
                              "חופשה" in shift_name or
                              "מחלה" in shift_name)
 
-        # משמרות עם סגמנטים קבועים - משתמשים בסגמנטים המוגדרים ישירות (לא לפי שעות דיווח)
-        # כולל: משמרות תגבור, יום חופשה, יום מחלה
-        is_tagbur_shift = "תגבור" in shift_name or is_vacation_report
+        # משמרות תגבור - משתמשים בסגמנטים המוגדרים ישירות (לא לפי שעות דיווח)
+        # הערה: חופשה/מחלה מטופלות בנפרד - לא כתגבור
+        is_tagbur_shift = "תגבור" in shift_name
+
+        # משמרות חופשה/מחלה - סגמנטים קבועים אבל נספרות כחופשה
+        is_fixed_vacation_shift = is_vacation_report and not is_tagbur_shift
 
         # משמרת לילה - סגמנטים דינמיים לפי זמן הכניסה בפועל
         # החוק: 2 שעות ראשונות עבודה, עד 06:30 כוננות, 06:30-08:00 עבודה
@@ -588,6 +591,26 @@ def _build_daily_map(
                 # שמירה באותו מבנה כמו סגמנטים רגילים: (start, end, type, shift_id, seg_id, apt_type, married)
                 entry["segments"].append((
                     seg_start, seg_end, effective_seg_type,
+                    r["shift_type_id"], segment_id, apartment_type_id, is_married
+                ))
+            continue  # דלג על העיבוד הרגיל עבור משמרת זו
+
+        # משמרת חופשה/מחלה קבועה - מוסיפים את הסגמנטים ישירות כחופשה (לא כתגבור)
+        if is_fixed_vacation_shift and seg_list:
+            display_date = r_date  # יום הדיווח
+            day_key = display_date.strftime("%d/%m/%Y")
+            entry = daily_map.setdefault(day_key, {"segments": [], "date": display_date})
+
+            for seg in seg_list:
+                seg_start, seg_end = span_minutes(seg["start_time"], seg["end_time"])
+
+                segment_id = seg.get("id")
+                apartment_type_id = r.get("apartment_type_id")
+                is_married = r.get("is_married")
+
+                # סימון כחופשה - יטופל בנפרד ב-_process_daily_map
+                entry["segments"].append((
+                    seg_start, seg_end, "vacation",
                     r["shift_type_id"], segment_id, apartment_type_id, is_married
                 ))
             continue  # דלג על העיבוד הרגיל עבור משמרת זו
