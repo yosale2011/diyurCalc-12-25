@@ -293,6 +293,13 @@ def guide_view(
             monthly_totals["calc175"] = minutes_by_rate["calc175"]
             monthly_totals["calc200"] = minutes_by_rate["calc200"]
 
+            # Calculate total_hours from daily_segments (sum of all work minutes, excluding standby)
+            # This ensures the display matches the actual calculated segments
+            total_work_minutes = sum(
+                day["total_minutes_no_standby"] for day in daily_segments
+            )
+            monthly_totals["total_hours"] = total_work_minutes
+
             # Store variable rate hours data
             monthly_totals["calc_variable"] = variable_rate_minutes  # Minutes at variable rate
             monthly_totals["payment_calc_variable"] = variable_rate_payment

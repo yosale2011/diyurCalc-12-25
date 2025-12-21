@@ -428,6 +428,13 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                                 # Add as work segment with 100% wage
                                 entry["segments"].append((eff_uncovered_start, eff_uncovered_end, "work", "100%", r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, p_date))
 
+                                # Also update buckets: move from "שעות עבודה" to "100%"
+                                entry["buckets"]["שעות עבודה"] -= uncovered_before
+                                if entry["buckets"]["שעות עבודה"] <= 0:
+                                    del entry["buckets"]["שעות עבודה"]
+                                entry["buckets"].setdefault("100%", 0)
+                                entry["buckets"]["100%"] += uncovered_before
+
     # Process Daily Segments
     daily_segments = []
 
