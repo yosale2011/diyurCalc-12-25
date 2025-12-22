@@ -9,6 +9,16 @@
     .compact-cell { font-size: 12px; white-space: nowrap; }
     .combined-header { font-size: 12px; }
     .combined-header div { font-size: 11px; }
+
+    /* Sticky footer for totals row */
+    tfoot {
+        position: sticky;
+        bottom: 0;
+        z-index: 10;
+    }
+    tfoot tr {
+        box-shadow: 0 -2px 6px rgba(0,0,0,0.15);
+    }
 </style>
 <div class="card" style="max-width: none; width: 100%;">
     <div class="header-line" style="flex-wrap: wrap; gap: 10px;">
@@ -101,10 +111,11 @@
                     <td style="background: #e7f5ff; font-weight: bold; padding: 2px; text-align: right;">{{ "{:,.0f}".format((row.totals.total_payment or row.totals.payment or 0)) }}</td>
                 </tr>
                 {% endfor %}
-                
+            </tbody>
+            <tfoot>
                 <!-- Grand Totals Row -->
                 <tr style="background: #333; color: #fff; font-weight: bold; font-size: 11px;">
-                    <td style="position: sticky; right: 0; background: #333; z-index: 1; border-left: 2px solid #555; padding: 4px 6px;">סה"כ</td>
+                    <td style="position: sticky; right: 0; background: #333; z-index: 11; border-left: 2px solid #555; padding: 4px 6px;">סה"כ</td>
                     <td style="text-align: right; padding: 2px;">{% set v = grand_totals.calc100 or 0 %}{% if v > 0 %}{{ (v|float/60)|round(0) }}{% endif %}</td>
                     <td style="text-align: right; padding: 2px;">{% set v = grand_totals.calc125 or 0 %}{% if v > 0 %}{{ (v|float/60)|round(0) }}{% endif %}</td>
                     <td style="text-align: right; padding: 2px;">{% set v = grand_totals.calc150_overtime or 0 %}{% if v > 0 %}{{ (v|float/60)|round(0) }}{% endif %}</td>
@@ -120,7 +131,7 @@
                     <td style="text-align: right; padding: 2px; background: #6b21a8;">{% if grand_totals.extras and grand_totals.extras > 0 %}{{ "%.0f"|format(grand_totals.extras) }}{% endif %}</td>
                     <td style="background: #444; padding: 2px; text-align: right;">{{ "{:,.0f}".format(grand_totals.payment or 0) }}</td>
                 </tr>
-            </tbody>
+            </tfoot>
         </table>
     </div>
 </div>
@@ -178,14 +189,14 @@ function sortTable(n) {
   switching = true;
   // Set the sorting direction to ascending:
   dir = "asc";
-  
+
   while (switching) {
     switching = false;
     // Get rows from the first tbody (ignoring the header row which is in thead)
     var body = table.tBodies[0];
     rows = body.rows;
-    // Loop through all table rows except the last one (Grand Totals):
-    for (i = 0; i < rows.length - 2; i++) {
+    // Loop through all table rows (Grand Totals is now in tfoot, not tbody):
+    for (i = 0; i < rows.length - 1; i++) {
       shouldSwitch = false;
       
       x = rows[i].getElementsByTagName("TD")[n];
