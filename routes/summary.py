@@ -30,11 +30,12 @@ templates.env.globals["app_version"] = config.VERSION
 def general_summary(
     request: Request,
     year: Optional[int] = None,
-    month: Optional[int] = None
+    month: Optional[int] = None,
+    q: Optional[str] = None
 ) -> HTMLResponse:
     """General monthly summary view."""
     start_time = time.time()
-    logger.info(f"Starting general_summary for {month}/{year}")
+    logger.info(f"Starting general_summary for {month}/{year}, filter: {q}")
 
     # Set default date if not provided
     now = datetime.now(config.LOCAL_TZ)
@@ -72,16 +73,27 @@ def general_summary(
         loop_time = time.time() - pre_calc_time
         logger.info(f"Optimized calculation took: {loop_time:.4f}s")
 
+    # Filter by name if query provided
+    filtered_summary_data = summary_data
+    if q and q.strip():
+        query_lower = q.strip().lower()
+        filtered_summary_data = [
+            row for row in summary_data
+            if query_lower in row["name"].lower()
+        ]
+        logger.info(f"Filtered {len(summary_data)} -> {len(filtered_summary_data)} results")
+
     year_options = [2023, 2024, 2025, 2026]
     
     render_start = time.time()
     response = templates.TemplateResponse("general_summary.html", {
         "request": request,
         "payment_codes": payment_codes,
-        "summary_data": summary_data,
+        "summary_data": filtered_summary_data,
         "grand_totals": grand_totals,
         "selected_year": year,
         "selected_month": month,
+        "search_query": q or "",
         "years": year_options
     })
     render_time = time.time() - render_start

@@ -17,7 +17,13 @@
             <span style="font-size: 0.7em; color: #666; font-weight: normal;">({{ summary_data|length }} מדריכים)</span>
         </h2>
         <div class="controls" style="flex-wrap: wrap; gap: 6px;">
+            <div style="display: flex; gap: 6px; align-items: center;">
+                <input type="text" id="filterInput" value="{{ search_query }}" placeholder="סנן לפי שם..." 
+                       style="padding: 4px 8px; font-size: 13px; border: 1px solid #ccc; border-radius: 4px; min-width: 150px;">
+                <button onclick="clearFilter()" style="padding: 4px 10px; font-size: 12px; background: #dc3545; color: white; border: none; border-radius: 4px; cursor: pointer;">נקה</button>
+            </div>
             <form method="get" style="display: flex; gap: 6px; align-items: center;">
+                {% if search_query %}<input type="hidden" name="q" value="{{ search_query }}">{% endif %}
                 <select name="month" onchange="this.form.submit()" style="padding: 4px 6px; font-size: 13px;">
                     {% for m in range(1, 13) %}
                     <option value="{{ m }}" {% if m == selected_month %}selected{% endif %}>{{ "%02d"|format(m) }}</option>
@@ -75,7 +81,7 @@
             </thead>
             <tbody>
                 {% for row in summary_data %}
-                <tr>
+                <tr class="data-row" data-name="{{ row.name|lower }}">
                     <td style="position: sticky; right: 0; background: #fff; z-index: 1; border-left: 2px solid #eee; font-weight: bold; padding: 2px 6px;">
                         <a href="/guide/{{ row.person_id }}?year={{ selected_year }}&month={{ selected_month }}" style="text-decoration: none; color: #0969da; font-size: 12px;" title="לחץ לצפייה בדוח מפורט">{{ row.name }}</a>
                     </td>
@@ -120,6 +126,52 @@
 </div>
 
 <script>
+// סינון בזמן אמת
+document.addEventListener('DOMContentLoaded', function() {
+    const filterInput = document.getElementById('filterInput');
+    if (filterInput) {
+        filterInput.addEventListener('input', function() {
+            filterTable(this.value);
+        });
+        // אם יש ערך התחלתי, סנן מיד
+        if (filterInput.value) {
+            filterTable(filterInput.value);
+        }
+    }
+});
+
+function filterTable(query) {
+    const filterValue = query.toLowerCase().trim();
+    const rows = document.querySelectorAll('#summaryTable tbody tr.data-row');
+    let visibleCount = 0;
+    
+    rows.forEach(function(row) {
+        const name = row.getAttribute('data-name') || '';
+        if (filterValue === '' || name.includes(filterValue)) {
+            row.style.display = '';
+            visibleCount++;
+        } else {
+            row.style.display = 'none';
+        }
+    });
+    
+    // עדכון מספר המדריכים בתצוגה
+    const titleSpan = document.querySelector('.section-title span');
+    if (titleSpan && filterValue) {
+        titleSpan.textContent = `(${visibleCount} מדריכים${filterValue ? ' מסוננים' : ''})`;
+    } else if (titleSpan) {
+        titleSpan.textContent = `({{ summary_data|length }} מדריכים)`;
+    }
+}
+
+function clearFilter() {
+    const filterInput = document.getElementById('filterInput');
+    if (filterInput) {
+        filterInput.value = '';
+        filterTable('');
+    }
+}
+
 function sortTable(n) {
   var table, rows, switching, i, x, y, shouldSwitch, dir, switchcount = 0;
   table = document.getElementById("summaryTable");
