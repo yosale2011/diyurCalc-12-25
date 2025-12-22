@@ -281,15 +281,34 @@ def guide_view(
             # Store calculated payments in monthly_totals for template use
             monthly_totals["payment_calc100"] = payment_by_rate["calc100"]
             monthly_totals["payment_calc125"] = payment_by_rate["calc125"]
-            monthly_totals["payment_calc150"] = payment_by_rate["calc150"]
             monthly_totals["payment_calc175"] = payment_by_rate["calc175"]
             monthly_totals["payment_calc200"] = payment_by_rate["calc200"]
 
+            # For calc150, we need to recalculate payment including tagbur
+            # monthly_totals["calc150_overtime"] and ["calc150_shabbat"] include tagbur from logic.py
+            # So we calculate payment from these values directly
+            calc150_overtime_minutes = monthly_totals.get("calc150_overtime", 0)
+            calc150_shabbat_minutes = monthly_totals.get("calc150_shabbat", 0)
+            
+            # Calculate payment for overtime (150% at minimum wage) - includes tagbur
+            payment_calc150_overtime = (calc150_overtime_minutes / 60) * MINIMUM_WAGE * 1.5
+            
+            # Calculate payment for shabbat (150% at minimum wage) - includes tagbur
+            payment_calc150_shabbat = (calc150_shabbat_minutes / 60) * MINIMUM_WAGE * 1.5
+            
+            # Total calc150 payment = overtime + shabbat (both include tagbur)
+            monthly_totals["payment_calc150"] = payment_calc150_overtime + payment_calc150_shabbat
+            
+            # Store split payments for template
+            monthly_totals["payment_calc150_overtime"] = payment_calc150_overtime
+            monthly_totals["payment_calc150_shabbat"] = payment_calc150_shabbat
+
             # Override the minutes values to exclude variable rate hours
             # This prevents double-counting in the payment table
+            # BUT: Keep calc150, calc150_overtime, calc150_shabbat from monthly_totals (they include tagbur)
             monthly_totals["calc100"] = minutes_by_rate["calc100"]
             monthly_totals["calc125"] = minutes_by_rate["calc125"]
-            monthly_totals["calc150"] = minutes_by_rate["calc150"]
+            # Don't override calc150, calc150_overtime, calc150_shabbat - they include tagbur from monthly_totals
             monthly_totals["calc175"] = minutes_by_rate["calc175"]
             monthly_totals["calc200"] = minutes_by_rate["calc200"]
 

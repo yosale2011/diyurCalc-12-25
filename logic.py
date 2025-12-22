@@ -561,6 +561,10 @@ def _build_daily_map(
             if "tagbur_wages" not in entry or not entry["tagbur_wages"]:
                 entry["tagbur_wages"] = {"calc100": 0, "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0}
 
+            # שמירת זמני הסגמנטים לחישוב שבת/חול
+            if "tagbur_segments_detail" not in entry:
+                entry["tagbur_segments_detail"] = []
+            
             for seg in seg_list:
                 seg_start, seg_end = span_minutes(seg["start_time"], seg["end_time"])
                 duration = seg_end - seg_start
@@ -573,6 +577,14 @@ def _build_daily_map(
                 apartment_type_id = r.get("apartment_type_id")
                 is_married = r.get("is_married")
                 wage_percent = seg.get("wage_percent", 100)
+
+                # שמירת פרטי הסגמנט לחישוב שבת/חול
+                entry["tagbur_segments_detail"].append({
+                    "start": seg_start,
+                    "end": seg_end,
+                    "wage_percent": wage_percent,
+                    "date": display_date
+                })
 
                 # חישוב לפי אחוז קבוע
                 if wage_percent == 100:
@@ -1136,9 +1148,92 @@ def _process_daily_map(
             tagbur = entry["tagbur_wages"]
             totals["calc100"] += tagbur.get("calc100", 0)
             totals["calc125"] += tagbur.get("calc125", 0)
-            totals["calc150"] += tagbur.get("calc150", 0)
             totals["calc175"] += tagbur.get("calc175", 0)
             totals["calc200"] += tagbur.get("calc200", 0)
+            
+            # חישוב calc150 עם הפרדה בין שבת לחול
+            tagbur_calc150 = tagbur.get("calc150", 0)
+            if tagbur_calc150 > 0:
+                # בדיקה אם יש פרטי סגמנטים לחישוב שבת/חול
+                tagbur_segments_detail = entry.get("tagbur_segments_detail", [])
+                if tagbur_segments_detail:
+                    # חישוב לפי סגמנטים - בדיקה אם כל סגמנט הוא שבת או חול
+                    calc150_shabbat_minutes = 0
+                    calc150_overtime_minutes = 0
+                    
+                    weekday = day_date.weekday()
+                    is_fri_or_sat = weekday in (FRIDAY, SATURDAY)
+                    
+                    # קבלת גבולות שבת אם רלוונטי
+                    shabbat_enter, shabbat_exit = (-1, -1)
+                    if is_fri_or_sat:
+                        shabbat_enter, shabbat_exit = _get_shabbat_boundaries(day_date, shabbat_cache)
+                    
+                    for seg_detail in tagbur_segments_detail:
+                        if seg_detail["wage_percent"] == 150:
+                            seg_start = seg_detail["start"] % MINUTES_PER_DAY  # נרמול ל-0-1439
+                            seg_end = seg_detail["end"] % MINUTES_PER_DAY
+                            seg_date = seg_detail["date"]
+                            seg_weekday = seg_date.weekday()
+                            seg_duration = seg_end - seg_start
+                            
+                            # בדיקה אם הסגמנט נופל בשבת
+                            is_seg_shabbat = False
+                            if seg_weekday == FRIDAY and is_fri_or_sat:
+                                # יום שישי - בדיקה אם הסגמנט מתחיל אחרי כניסת שבת
+                                if seg_start >= shabbat_enter:
+                                    # כל הסגמנט הוא שבת
+                                    is_seg_shabbat = True
+                                elif seg_end > shabbat_enter:
+                                    # הסגמנט חוצה את כניסת שבת - נחלק אותו
+                                    shabbat_part = seg_end - shabbat_enter
+                                    weekday_part = shabbat_enter - seg_start
+                                    calc150_shabbat_minutes += shabbat_part
+                                    calc150_overtime_minutes += weekday_part
+                                    continue  # כבר עדכנו, עוברים לסגמנט הבא
+                            elif seg_weekday == SATURDAY and is_fri_or_sat:
+                                # יום שבת - בדיקה אם הסגמנט מסתיים לפני יציאת שבת
+                                # shabbat_exit הוא יחסית לחצות יום שישי, אז בשבת זה shabbat_exit - 1440
+                                shabbat_exit_saturday = shabbat_exit - MINUTES_PER_DAY
+                                if seg_end <= shabbat_exit_saturday:
+                                    # כל הסגמנט הוא שבת
+                                    is_seg_shabbat = True
+                                elif seg_start < shabbat_exit_saturday:
+                                    # הסגמנט חוצה את יציאת שבת - נחלק אותו
+                                    shabbat_part = shabbat_exit_saturday - seg_start
+                                    weekday_part = seg_end - shabbat_exit_saturday
+                                    calc150_shabbat_minutes += shabbat_part
+                                    calc150_overtime_minutes += weekday_part
+                                    continue  # כבר עדכנו, עוברים לסגמנט הבא
+                            
+                            # אם לא חילקנו את הסגמנט, נבדוק אם הוא שבת או חול
+                            if is_seg_shabbat:
+                                calc150_shabbat_minutes += seg_duration
+                            else:
+                                calc150_overtime_minutes += seg_duration
+                    
+                    # אם יש חלוקה, עדכן את הסכומים
+                    if calc150_shabbat_minutes > 0 or calc150_overtime_minutes > 0:
+                        totals["calc150"] += tagbur_calc150
+                        totals["calc150_shabbat"] += calc150_shabbat_minutes
+                        totals["calc150_overtime"] += calc150_overtime_minutes
+                    else:
+                        # אם לא הצלחנו לחלק, נחשוב לפי יום השבוע
+                        if weekday == SATURDAY:
+                            totals["calc150"] += tagbur_calc150
+                            totals["calc150_shabbat"] += tagbur_calc150
+                        elif weekday == FRIDAY:
+                            # יום שישי - נבדוק אם יש חלק בשבת
+                            # נניח שכל התגבור הוא חול (כי בדרך כלל תגבור ביום שישי הוא לפני שבת)
+                            totals["calc150"] += tagbur_calc150
+                            totals["calc150_overtime"] += tagbur_calc150
+                        else:
+                            # חול
+                            totals["calc150"] += tagbur_calc150
+                            totals["calc150_overtime"] += tagbur_calc150
+                else:
+                    # אין calc150 בתגבור
+                    totals["calc150"] += tagbur_calc150
 
             total_day_minutes = sum(tagbur.values())
             totals["total_hours"] += total_day_minutes

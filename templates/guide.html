@@ -1052,8 +1052,8 @@
             </tr>
           </thead>
           <tbody>
-            {# שורות שבת מפוצלות - בסיס 100% ותוספת 50% #}
-            {% if monthly_totals.calc150_shabbat_100 and monthly_totals.calc150_shabbat_100 > 0 %}
+            {# שורות שבת מפוצלות - בסיס 100% ותוספת 50% - רק אם יש קוד מירב נפרד #}
+            {% if monthly_totals.calc150_shabbat_100 and monthly_totals.calc150_shabbat_100 > 0 and codes_map.get('calc150_shabbat_100') %}
             <tr style="background-color: #e8f5e9;">
                 <td>שעות שבת - בסיס (100%)</td>
                 <td>{{ codes_map.get('calc150_shabbat_100', '') }}</td>
@@ -1070,13 +1070,34 @@
             </tr>
             {% endif %}
             
+            {# הצגת סיכום שעות שבת 150% אם יש ערך אבל אין פיצול ל-100% + 50% #}
+            {% set calc150_shabbat_minutes = monthly_totals.get('calc150_shabbat', 0) or 0 %}
+            {% set calc150_shabbat_hours_val = (calc150_shabbat_minutes | float) / 60 %}
+            {% if calc150_shabbat_hours_val > 0.01 and not (monthly_totals.calc150_shabbat_100 and monthly_totals.calc150_shabbat_100 > 0 and codes_map.get('calc150_shabbat_100')) %}
+            <tr>
+              <td>שעות שבת (150%)</td>
+              <td>{{ codes_map.get('calc150_shabbat', '') }}</td>
+              <td>{{ calc150_shabbat_hours_val | round(2) }}</td>
+              <td>{{ "%.2f"|format(hourly_rate * 1.5) }} ₪</td>
+              <td>
+                {% if monthly_totals.get('payment_calc150_shabbat') and monthly_totals.payment_calc150_shabbat > 0 %}
+                  {{ monthly_totals.payment_calc150_shabbat | format_currency }}
+                {% else %}
+                  {{ (calc150_shabbat_hours_val * hourly_rate * 1.5) | format_currency }}
+                {% endif %}
+              </td>
+            </tr>
+            {% endif %}
+            
             {% if payment_codes %}
             {% for code in payment_codes if code.display_order < 200 %}
                 {% set key = code.internal_key %}
                 {% set val = monthly_totals[key] or 0 %}
                 
-                {# דילוג על שעות שבת 150% - כבר הצגנו אותן מפוצלות למעלה #}
-                {% if key == 'calc150_shabbat' or key == 'calc150_shabbat_100' or key == 'calc150_shabbat_50' %}
+                {# דילוג על שעות שבת 150% מפוצלות - רק אם הצגנו אותן מפוצלות למעלה #}
+                {% if key == 'calc150_shabbat_100' or key == 'calc150_shabbat_50' %}
+                    {# skip - already shown as split rows above if codes exist #}
+                {% elif key == 'calc150_shabbat' and monthly_totals.calc150_shabbat_100 and monthly_totals.calc150_shabbat_100 > 0 and codes_map.get('calc150_shabbat_100') %}
                     {# skip - already shown as split rows above #}
                 {% elif val > 0 %}
                     <tr>
@@ -1159,8 +1180,32 @@
               <td>{{ codes_map.get('calc150_overtime', '') }}</td>
               <td>{{ (monthly_totals.calc150_overtime | float / 60) | round(2) }}</td>
               <td>{{ "%.2f"|format(hourly_rate * 1.5) }} ₪</td>
-              <td>{{ ((monthly_totals.calc150_overtime | float / 60) * hourly_rate * 1.5) | format_currency }}</td>
+              <td>
+                {% if monthly_totals.get('payment_calc150_overtime') %}
+                  {{ monthly_totals.payment_calc150_overtime | format_currency }}
+                {% else %}
+                  {{ ((monthly_totals.calc150_overtime | float / 60) * hourly_rate * 1.5) | format_currency }}
+                {% endif %}
+              </td>
             </tr>
+            <!-- 150% Shabbat -->
+            {% set calc150_shabbat_minutes = monthly_totals.get('calc150_shabbat', 0) or 0 %}
+            {% set calc150_shabbat_hours_val = (calc150_shabbat_minutes | float) / 60 %}
+            {% if calc150_shabbat_hours_val > 0.01 %}
+            <tr>
+              <td>שעות שבת (150%)</td>
+              <td>{{ codes_map.get('calc150_shabbat', '') }}</td>
+              <td>{{ calc150_shabbat_hours_val | round(2) }}</td>
+              <td>{{ "%.2f"|format(hourly_rate * 1.5) }} ₪</td>
+              <td>
+                {% if monthly_totals.get('payment_calc150_shabbat') and monthly_totals.payment_calc150_shabbat > 0 %}
+                  {{ monthly_totals.payment_calc150_shabbat | format_currency }}
+                {% else %}
+                  {{ (calc150_shabbat_hours_val * hourly_rate * 1.5) | format_currency }}
+                {% endif %}
+              </td>
+            </tr>
+            {% endif %}
             <!-- 175% -->
             <tr>
               <td>שעות שבת (175%)</td>
