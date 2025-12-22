@@ -475,6 +475,129 @@ def generate_gesher_file(conn, year: int, month: int, filter_name: str = None, c
     return result
 
 
+def generate_gesher_file_for_multiple(conn, person_ids: List[int], year: int, month: int) -> Tuple[str, str]:
+    """
+    מייצר קובץ גשר ממוזג לרשימת עובדים נבחרים
+
+    Args:
+        conn: חיבור למסד הנתונים
+        person_ids: רשימת מזהי עובדים
+        year: שנה
+        month: חודש
+
+    Returns:
+        Tuple[תוכן הקובץ, קוד מפעל הראשון]
+    """
+    from logic import calculate_monthly_summary
+
+    # טעינת תצורה
+    export_codes = load_export_config_from_db(conn)
+    if not export_codes:
+        export_codes = load_export_config()
+    options = get_export_options()
+    minimum_wage = get_minimum_wage(conn)
+
+    # שליפת פרטי העובדים
+    if not person_ids:
+        return ("", "")
+
+    placeholders = ','.join(['?' if hasattr(conn, 'execute') else '%s'] * len(person_ids))
+    cursor = conn.execute(f"""
+        SELECT p.id, p.name, p.meirav_code, e.code as employer_code
+        FROM people p
+        LEFT JOIN employers e ON p.employer_id = e.id
+        WHERE p.id IN ({placeholders})
+        ORDER BY p.name
+    """, tuple(person_ids))
+    people_data = {row['id']: row for row in cursor.fetchall()}
+
+    if not people_data:
+        return ("", "")
+
+    # קביעת מפעל הראשון (לשם הקובץ)
+    first_company = None
+    for pid in person_ids:
+        if pid in people_data:
+            first_company = people_data[pid].get('employer_code') or '001'
+            break
+    if not first_company:
+        first_company = '001'
+
+    # חישוב יעיל - כל העובדים בבת אחת
+    raw_conn = conn.conn if hasattr(conn, 'conn') else conn
+    summary_data, _ = calculate_monthly_summary(raw_conn, year, month)
+
+    # בניית מיפוי person_id -> totals
+    totals_by_id = {}
+    for person_data in summary_data:
+        pid = person_data.get('person_id') or person_data.get('id')
+        if pid:
+            totals_by_id[pid] = person_data.get('totals', {})
+
+    output = io.StringIO()
+
+    # כותרת - CRLF (Windows format)
+    header = format_gesher_header(first_company, year, month)
+    output.write(header + "\r\n")
+
+    line_count = 0
+
+    for person_id in person_ids:
+        if person_id not in people_data:
+            continue
+
+        person = people_data[person_id]
+        meirav_code = person.get('meirav_code')
+
+        if not meirav_code:
+            continue
+
+        # וידוא שקוד מירב תקין
+        try:
+            meirav_code_clean = ''.join(filter(str.isdigit, str(meirav_code)))
+            if not meirav_code_clean:
+                continue
+            employee_code = int(meirav_code_clean)
+        except ValueError:
+            continue
+
+        # קבלת הסיכומים מה-cache
+        totals = totals_by_id.get(person_id, {})
+
+        # יצירת שורה לכל סמל
+        for symbol, value_tuple in export_codes.items():
+            # תמיכה גם בפורמט ישן (2 איברים) וגם חדש (3 איברים)
+            if len(value_tuple) == 3:
+                internal_key, value_type, display_name = value_tuple
+            else:
+                internal_key, value_type = value_tuple
+
+            quantity, rate = calculate_value(totals, internal_key, value_type, minimum_wage)
+
+            # דילוג על ערכים אפסיים
+            if not options['export_zero_values']:
+                if value_type.startswith('hours_') and quantity < options['min_amount']:
+                    continue
+                elif value_type == 'money' and rate < options['min_amount']:
+                    continue
+                elif quantity < options['min_amount'] and rate < options['min_amount']:
+                    continue
+
+            # פורמט השורה לפי מבנה גשר - CRLF (Windows format)
+            line = format_gesher_line(
+                employee_code=employee_code,
+                symbol=symbol,
+                quantity=quantity,
+                rate=rate
+            )
+            output.write(line + "\r\n")
+            line_count += 1
+
+    result = output.getvalue()
+    print(f"Gesher export for {len(person_ids)} selected people: {line_count} lines")
+    return (result, first_company)
+
+
 def get_export_preview(conn, year: int, month: int, limit: int = 50) -> List[Dict]:
     """
     מחזיר תצוגה מקדימה של הייצוא

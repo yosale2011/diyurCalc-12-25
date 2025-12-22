@@ -28,6 +28,7 @@ from routes.summary import general_summary
 from routes.export import (
     export_gesher,
     export_gesher_person,
+    export_gesher_multiple,
     export_gesher_preview,
     export_excel,
 )
@@ -167,6 +168,17 @@ def export_gesher_route(year: int, month: int, company: str = None, filter_name:
 def export_gesher_person_route(person_id: int, year: int, month: int, encoding: str = "ascii"):
     """Export Gesher file for individual person."""
     return export_gesher_person(person_id, year, month, encoding)
+
+
+@app.post("/export/gesher/multiple")
+def export_gesher_multiple_route(year: int, month: int, person_ids: str, encoding: str = "ascii"):
+    """Export Gesher files for multiple people as ZIP."""
+    # person_ids מגיע כמחרוזת מופרדת בפסיקים
+    ids = [int(x.strip()) for x in person_ids.split(",") if x.strip().isdigit()]
+    if not ids:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="לא נבחרו עובדים")
+    return export_gesher_multiple(ids, year, month, encoding)
 
 
 @app.get("/export/gesher/preview")

@@ -301,14 +301,13 @@ function exportSelected() {
         return;
     }
 
-    // ייצוא כל עובד שנבחר (פותח הורדות מרובות)
-    // פתיחה עם delay קטן כדי למנוע חסימת popup blocker
-    selected.forEach((personId, index) => {
-        setTimeout(() => {
-            const url = `/export/gesher/person/${personId}?year={{ selected_year }}&month={{ selected_month }}`;
-            window.open(url, '_blank');
-        }, index * 100);
-    });
+    // ייצוא כל העובדים שנבחרו כקובץ ZIP אחד
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '/export/gesher/multiple?year={{ selected_year }}&month={{ selected_month }}&person_ids=' + selected.join(',');
+    document.body.appendChild(form);
+    form.submit();
+    document.body.removeChild(form);
 }
 
 function filterTable() {

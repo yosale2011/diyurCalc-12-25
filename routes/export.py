@@ -5,7 +5,7 @@ Contains file export functionality for various formats.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
 from urllib.parse import quote
 
 from fastapi import Request, HTTPException
@@ -89,6 +89,37 @@ def export_gesher_person(
         media_type="application/octet-stream",
         headers={
             "Content-Disposition": f"attachment; filename={filename}; filename*=UTF-8''{display_name}_{year}_{month:02d}.mrv",
+            "Content-Type": f"text/plain; charset={encoding}"
+        }
+    )
+
+
+def export_gesher_multiple(
+    person_ids: List[int],
+    year: int,
+    month: int,
+    encoding: str = "ascii"
+) -> Response:
+    """
+    ייצוא קובץ גשר ממוזג למספר עובדים נבחרים
+    """
+    with get_conn() as conn:
+        content, company = gesher_exporter.generate_gesher_file_for_multiple(conn, person_ids, year, month)
+
+    if not content:
+        raise HTTPException(status_code=400, detail="לא נוצרו נתונים - אין קוד מירב לעובדים שנבחרו")
+
+    # קידוד הקובץ
+    encoded_content = content.encode(encoding, errors='replace')
+
+    # שם קובץ עם קוד מפעל
+    filename = f"gesher_{company}_{year}_{month:02d}.mrv"
+
+    return Response(
+        content=encoded_content,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f"attachment; filename={filename}",
             "Content-Type": f"text/plain; charset={encoding}"
         }
     )
