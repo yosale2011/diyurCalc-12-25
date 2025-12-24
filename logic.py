@@ -432,10 +432,24 @@ def calculate_wage_rate(
 
 
 def get_payment_codes(conn):
-    """Fetch payment codes sorted by display order."""
+    """Fetch payment codes sorted by merav_code (symbol numbers), with 100+ first."""
     try:
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        cursor.execute("SELECT * FROM payment_codes ORDER BY display_order")
+        # Sort by merav_code: first numeric values >= 100 (ascending), then others
+        cursor.execute("""
+            SELECT * FROM payment_codes 
+            ORDER BY 
+                CASE 
+                    WHEN merav_code ~ '^[0-9]+$' AND merav_code::integer >= 100 THEN 0
+                    WHEN merav_code ~ '^[0-9]+$' THEN 1
+                    ELSE 2
+                END,
+                CASE 
+                    WHEN merav_code ~ '^[0-9]+$' THEN merav_code::integer
+                    ELSE 999999
+                END,
+                merav_code
+        """)
         result = cursor.fetchall()
         cursor.close()
         return result

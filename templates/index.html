@@ -134,24 +134,48 @@
     const searchInput = document.getElementById('q');
     const filterValue = searchInput.value.toLowerCase().trim();
     const rows = document.querySelectorAll('#guidesTable tbody tr.instructor-row');
+    const tbody = document.querySelector('#guidesTable tbody');
+    
+    let visibleCount = 0;
     
     rows.forEach(function(row) {
       const name = row.getAttribute('data-name') || '';
       if (filterValue === '' || name.toLowerCase().includes(filterValue)) {
         row.style.display = '';
+        visibleCount++;
       } else {
         row.style.display = 'none';
       }
     });
     
-    // Handle "לא נמצאו מדריכים" row
-    const noResultsRow = document.querySelector('#guidesTable tbody tr:not(.instructor-row)');
-    if (noResultsRow) {
-      const visibleRows = Array.from(rows).filter(row => row.style.display !== 'none');
-      if (visibleRows.length === 0 && filterValue !== '') {
-        noResultsRow.style.display = '';
+    // Handle existing "לא נמצאו מדריכים" row (from template when no guides initially)
+    const existingNoResultsRow = document.querySelector('#guidesTable tbody tr:not(.instructor-row):not(.filter-no-results)');
+    if (existingNoResultsRow) {
+      if (visibleCount === 0 && filterValue !== '') {
+        existingNoResultsRow.style.display = '';
       } else {
-        noResultsRow.style.display = 'none';
+        existingNoResultsRow.style.display = 'none';
+      }
+    }
+    
+    // Create or update dynamic "no results" row when filtering produces no matches
+    let filterNoResultsRow = document.querySelector('#guidesTable tbody tr.filter-no-results');
+    
+    if (visibleCount === 0 && filterValue !== '') {
+      // Need to show "no results" message
+      if (!filterNoResultsRow && tbody) {
+        // Create the row if it doesn't exist
+        filterNoResultsRow = document.createElement('tr');
+        filterNoResultsRow.className = 'filter-no-results';
+        filterNoResultsRow.innerHTML = '<td colspan="5" class="muted">לא נמצאו מדריכים</td>';
+        tbody.appendChild(filterNoResultsRow);
+      } else if (filterNoResultsRow) {
+        filterNoResultsRow.style.display = '';
+      }
+    } else {
+      // Remove the dynamic "no results" row if it exists
+      if (filterNoResultsRow) {
+        filterNoResultsRow.remove();
       }
     }
   }
