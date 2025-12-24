@@ -2,70 +2,256 @@
 
 {% block content %}
 <style>
-    .codes-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    .codes-table th, .codes-table td { padding: 6px 8px; border-bottom: 1px solid #eee; }
-    .codes-table th { background: #f8f9fa; font-weight: 600; text-align: right; font-size: 12px; }
-    .codes-table tr:hover { background: #f5f7fa; }
-    .codes-table input[type="text"], .codes-table input[type="number"] {
-        border: 1px solid #ddd;
-        border-radius: 4px;
-        padding: 4px 8px;
-        font-size: 13px;
+    .codes-card {
+        max-width: 900px;
+        margin: 0 auto;
+        animation: fadeIn 0.4s ease-out;
     }
+    
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .codes-table { 
+        width: 100%; 
+        border-collapse: separate; 
+        border-spacing: 0;
+        margin-top: 20px;
+    }
+    
+    .codes-table th, .codes-table td { 
+        padding: 12px 15px; 
+        border-bottom: 1px solid #edf2f7; 
+    }
+    
+    .codes-table th { 
+        background: #f8fafc; 
+        font-weight: 600; 
+        text-align: right; 
+        font-size: 13px;
+        color: #4a5568;
+        cursor: pointer;
+        user-select: none;
+        transition: background 0.2s;
+        position: relative;
+    }
+    
+    .codes-table th:hover {
+        background: #edf2f7;
+    }
+
+    .codes-table th.sort-asc::after {
+        content: ' ↑';
+        position: absolute;
+        opacity: 0.5;
+    }
+
+    .codes-table th.sort-desc::after {
+        content: ' ↓';
+        position: absolute;
+        opacity: 0.5;
+    }
+    
+    .codes-table tr:hover { 
+        background: #fdfdfd; 
+    }
+    
+    .codes-table input[type="text"], .codes-table input[type="number"] {
+        border: 1px solid #e2e8f0;
+        border-radius: 6px;
+        padding: 6px 10px;
+        font-size: 14px;
+        transition: all 0.2s;
+        width: 100%;
+        box-sizing: border-box;
+    }
+    
     .codes-table input[type="text"]:focus, .codes-table input[type="number"]:focus {
-        border-color: #1f6feb;
+        border-color: #3182ce;
+        box-shadow: 0 0 0 3px rgba(66, 153, 225, 0.15);
         outline: none;
     }
-    .order-input { width: 45px; text-align: center; }
-    .code-input { width: 60px; text-align: center; font-family: monospace; }
-    .name-input { width: 100%; box-sizing: border-box; }
-    .key-cell { font-family: monospace; font-size: 11px; color: #666; }
+    
+    .order-input { width: 60px !important; text-align: center; }
+    .code-input { width: 80px !important; text-align: center; font-family: 'Courier New', Courier, monospace; font-weight: bold; }
+    .key-cell { 
+        font-family: 'Courier New', Courier, monospace; 
+        font-size: 12px; 
+        color: #718096;
+        background: #f7fafc;
+        padding: 4px 8px !important;
+        border-radius: 4px;
+    }
+
+    .save-btn {
+        background: #2b6cb0;
+        color: white;
+        border: none;
+        padding: 10px 24px;
+        border-radius: 6px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: background 0.2s;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .save-btn:hover {
+        background: #2c5282;
+    }
+
+    .back-link {
+        color: #4a5568;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        font-size: 14px;
+        transition: color 0.2s;
+    }
+
+    .back-link:hover {
+        color: #2d3748;
+    }
 </style>
 
-<div class="card" style="max-width: 700px;">
+<div class="card codes-card">
     <div class="header-line">
-        <h2 class="section-title" style="font-size: 18px; margin: 0;">ניהול סמלי שכר</h2>
+        <div>
+            <h2 class="section-title" style="font-size: 22px; margin: 0; color: #1a202c;">ניהול סמלי שכר</h2>
+            <p style="color: #718096; margin: 4px 0 0; font-size: 14px;">
+                עריכת שמות רכיבים וקודי מירב לייצוא גשר.
+            </p>
+        </div>
         <div class="controls">
-            <a href="/summary" style="text-decoration: none; padding: 4px 10px; font-size: 12px; border: 1px solid #ccc; border-radius: 4px; color: #333;">חזרה לסיכום</a>
+            <a href="/summary" class="back-link">
+                <span>← חזרה לסיכום</span>
+            </a>
         </div>
     </div>
 
-    <p style="color: #666; margin: 10px 0 15px; font-size: 13px;">
-        עריכת שמות רכיבים וקודי מירב לייצוא גשר.
-    </p>
-
-    <form method="post" action="/admin/payment-codes/update">
-        <table class="codes-table">
+    <form method="post" action="/admin/payment-codes/update" id="codesForm">
+        <table class="codes-table" id="paymentCodesTable">
             <thead>
                 <tr>
-                    <th style="width: 50px;">סדר</th>
-                    <th style="width: 70px;">קוד</th>
-                    <th>תיאור</th>
-                    <th style="width: 120px;">מזהה</th>
+                    <th style="width: 80px;" onclick="sortTable(0)">סדר</th>
+                    <th style="width: 100px;" onclick="sortTable(1)">קוד</th>
+                    <th onclick="sortTable(2)">תיאור</th>
+                    <th style="width: 150px;" onclick="sortTable(3)">מזהה</th>
                 </tr>
             </thead>
             <tbody>
                 {% for code in codes %}
                 <tr>
-                    <td>
+                    <td data-value="{{ code.display_order or 999 }}">
                         <input type="number" name="display_order_{{ code.id }}" value="{{ code.display_order }}" class="order-input">
                     </td>
-                    <td>
+                    <td data-value="{{ code.merav_code }}">
                         <input type="text" name="merav_code_{{ code.id }}" value="{{ code.merav_code }}" class="code-input">
                     </td>
-                    <td>
+                    <td data-value="{{ code.display_name }}">
                         <input type="text" name="display_name_{{ code.id }}" value="{{ code.display_name }}" class="name-input">
                     </td>
-                    <td class="key-cell">{{ code.internal_key }}</td>
+                    <td class="key-cell" data-value="{{ code.internal_key }}">{{ code.internal_key }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
 
-        <div style="margin-top: 15px; text-align: left;">
-            <button type="submit" style="padding: 8px 16px; font-size: 14px; font-weight: bold;">שמור</button>
+        <div style="margin-top: 25px; display: flex; justify-content: flex-end;">
+            <button type="submit" class="save-btn">
+                <span>שמור שינויים</span>
+            </button>
         </div>
     </form>
 </div>
+
+<script>
+function sortTable(n) {
+    var table, rows, switching, i, x, y, shouldSwitch, dir, switchcount = 0;
+    table = document.getElementById("paymentCodesTable");
+    switching = true;
+    dir = "asc"; 
+    
+    // Clear all sort classes
+    var headers = table.getElementsByTagName("TH");
+    for (i = 0; i < headers.length; i++) {
+        headers[i].classList.remove("sort-asc", "sort-desc");
+    }
+
+    while (switching) {
+        switching = false;
+        rows = table.rows;
+        for (i = 1; i < (rows.length - 1); i++) {
+            shouldSwitch = false;
+            x = rows[i].getElementsByTagName("TD")[n];
+            y = rows[i + 1].getElementsByTagName("TD")[n];
+            
+            // Use data-value for sorting to handle inputs correctly
+            var xValue = x.getAttribute("data-value") || "";
+            var yValue = y.getAttribute("data-value") || "";
+            
+            // Try to compare as numbers if possible
+            var xNum = parseFloat(xValue);
+            var yNum = parseFloat(yValue);
+            
+            if (!isNaN(xNum) && !isNaN(yNum)) {
+                if (dir == "asc") {
+                    if (xNum > yNum) {
+                        shouldSwitch = true;
+                        break;
+                    }
+                } else if (dir == "desc") {
+                    if (xNum < yNum) {
+                        shouldSwitch = true;
+                        break;
+                    }
+                }
+            } else {
+                if (dir == "asc") {
+                    if (xValue.toLowerCase() > yValue.toLowerCase()) {
+                        shouldSwitch = true;
+                        break;
+                    }
+                } else if (dir == "desc") {
+                    if (xValue.toLowerCase() < yValue.toLowerCase()) {
+                        shouldSwitch = true;
+                        break;
+                    }
+                }
+            }
+        }
+        if (shouldSwitch) {
+            rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);
+            switching = true;
+            switchcount ++;      
+        } else {
+            if (switchcount == 0 && dir == "asc") {
+                dir = "desc";
+                switching = true;
+            }
+        }
+    }
+    
+    // Add current sort class
+    if (dir == "asc") {
+        headers[n].classList.add("sort-asc");
+    } else {
+        headers[n].classList.add("sort-desc");
+    }
+}
+
+// Update data-value when inputs change so sorting stays accurate
+document.addEventListener('input', function(e) {
+    if (e.target.tagName === 'INPUT') {
+        var td = e.target.closest('td');
+        if (td) {
+            td.setAttribute('data-value', e.target.value);
+        }
+    }
+});
+</script>
 {% endblock %}
 

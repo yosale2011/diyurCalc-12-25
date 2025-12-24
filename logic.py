@@ -125,11 +125,11 @@ def to_local_date(ts: int | datetime | date) -> date:
 SHABBAT_CACHE_KEY = "shabbat_times_cache"
 SHABBAT_CACHE_TTL = 86400  # 24 hours
 
-def get_shabbat_times_cache(conn) -> Dict[str, Dict[str, str]]:
+def get_shabbat_times_cache(conn) -> Dict[str, Dict[str, Any]]:
     """
     Load Shabbat times from DB into a dictionary with 24-hour caching.
-    Key: Date string (YYYY-MM-DD) representing Friday.
-    Value: {'enter': HH:MM, 'exit': HH:MM}
+    Key: Date string (YYYY-MM-DD) representing the day.
+    Value: {'enter': HH:MM, 'exit': HH:MM, 'parsha': str, 'holiday': str}
     """
     # Check cache first
     cached_result = cache.get(SHABBAT_CACHE_KEY)
@@ -138,12 +138,17 @@ def get_shabbat_times_cache(conn) -> Dict[str, Dict[str, str]]:
 
     try:
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        cursor.execute("SELECT shabbat_date, candle_lighting, havdalah FROM shabbat_times")
+        cursor.execute("SELECT shabbat_date, candle_lighting, havdalah, parsha, holiday_name FROM shabbat_times")
         rows = cursor.fetchall()
         result = {}
         for r in rows:
-            if r["shabbat_date"] and r["candle_lighting"] and r["havdalah"]:
-                result[r["shabbat_date"]] = {"enter": r["candle_lighting"], "exit": r["havdalah"]}
+            if r["shabbat_date"]:
+                result[r["shabbat_date"]] = {
+                    "enter": r["candle_lighting"], 
+                    "exit": r["havdalah"],
+                    "parsha": r["parsha"],
+                    "holiday": r["holiday_name"]
+                }
         cursor.close()
 
         # Store in cache
@@ -432,23 +437,13 @@ def calculate_wage_rate(
 
 
 def get_payment_codes(conn):
-    """Fetch payment codes sorted by merav_code (symbol numbers), with 100+ first."""
+    """Fetch payment codes sorted by display_order (symbol numbers)."""
     try:
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        # Sort by merav_code: first numeric values >= 100 (ascending), then others
+        # Sort by display_order ascending
         cursor.execute("""
             SELECT * FROM payment_codes 
-            ORDER BY 
-                CASE 
-                    WHEN merav_code ~ '^[0-9]+$' AND merav_code::integer >= 100 THEN 0
-                    WHEN merav_code ~ '^[0-9]+$' THEN 1
-                    ELSE 2
-                END,
-                CASE 
-                    WHEN merav_code ~ '^[0-9]+$' THEN merav_code::integer
-                    ELSE 999999
-                END,
-                merav_code
+            ORDER BY display_order ASC NULLS LAST
         """)
         result = cursor.fetchall()
         cursor.close()

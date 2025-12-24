@@ -161,7 +161,7 @@ def guide_view(
         logger.info(f"get_minimum_wage took: {time.time() - wage_start:.4f}s")
 
         person = conn.execute(
-            "SELECT id, name, phone, email, type, is_active, start_date FROM people WHERE id = %s",
+            "SELECT id, name, phone, email, type, is_active, start_date, meirav_code FROM people WHERE id = %s",
             (person_id,),
         ).fetchone()
         if not person:

@@ -25,6 +25,7 @@ def load_export_config_from_db(conn) -> Dict[str, Tuple[str, str, str]]:
             SELECT internal_key, merav_code, display_name 
             FROM payment_codes 
             WHERE merav_code IS NOT NULL AND merav_code != ''
+            ORDER BY display_order ASC NULLS LAST
         """).fetchall()
         
         export_codes = {}

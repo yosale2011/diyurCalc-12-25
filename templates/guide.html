@@ -73,7 +73,7 @@
     
     /* Compact day headers */
     .day-header {
-      font-size: 7pt !important;
+      font-size: 10pt !important;
       margin: 2px 0 1px 0 !important;
       padding: 0 !important;
       page-break-after: avoid;
@@ -190,7 +190,7 @@
     
     /* Compact day headers in print */
     .panel-chains .day-header {
-      font-size: 6pt !important;
+      font-size: 10pt !important;
       margin: 1px 0 0 0 !important;
       padding: 0 !important;
       line-height: 1.1;
@@ -287,7 +287,7 @@
   
   /* Compact day headers on screen */
   .panel-chains .day-header {
-    font-size: 10pt;
+    font-size: 13pt;
     margin-bottom: 4px;
     color: #333;
     font-weight: bold;
@@ -528,12 +528,22 @@
 
       <section class="panel panel-chains">
         <div class="print-header" style="display: none;">
-          <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px;">
-            <div style="font-size: 8pt; color: #666;">גרסה {{ app_version }}</div>
-            <div style="font-size: 8pt; color: #666;" class="page-number"></div>
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 2px;">
+            <div style="font-size: 7pt; color: #888;">גרסה {{ app_version }}</div>
+            <div style="font-size: 7pt; color: #888;" class="page-number"></div>
           </div>
-          <h1 style="margin: 0; font-size: 16pt; text-align: center;">דוח פירוט רצפים - {{ person['name'] }}</h1>
-          <div style="text-align: center; font-size: 10pt; margin: 4px 0;">חודש: {{ "%02d"|format(selected_month) }}/{{ selected_year }}</div>
+          
+          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1.5px solid #000; padding-bottom: 3px;">
+            <div style="width: 120px;"></div> <!-- Spacer for symmetry -->
+            <h1 style="margin: 0; font-size: 16pt; text-align: center; flex-grow: 1;">דוח פירוט רצפים - {{ person['name'] }}</h1>
+            {% if person['meirav_code'] %}
+            <div style="font-size: 13pt; font-weight: bold; border: 2px solid #000; padding: 2px 8px; min-width: 80px; text-align: center;">
+              מירב: {{ person['meirav_code'] }}
+            </div>
+            {% endif %}
+          </div>
+          
+          <div style="text-align: center; font-size: 10pt; margin: 2px 0;">חודש: {{ "%02d"|format(selected_month) }}/{{ selected_year }}</div>
         </div>
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
           <h2 style="margin: 0; font-size: 20px;">דוח פירוט רצפים</h2>
@@ -546,7 +556,7 @@
         {% for day in daily_segments %}
           {% if day.chains and day.chains|length > 0 %}
           <div class="day-section" style="margin-bottom: 8px;">
-            <div class="day-header" style="margin-bottom: 4px; font-size: 9pt; color: #333; font-weight: bold;">
+            <div class="day-header" style="margin-bottom: 4px; font-size: 12pt; color: #333; font-weight: bold;">
               {{ day.day }} ({{ day.day_name }}, {{ day.hebrew_date }})
             </div>
             <table>
@@ -678,7 +688,7 @@
         <!-- סיכום חודשי -->
         {% if daily_segments %}
         <div style="margin-top: 16px; page-break-before: auto;">
-          <div class="day-header" style="margin-bottom: 4px; font-size: 10pt; color: #000; font-weight: bold; border-bottom: 2px solid #000;">
+          <div class="day-header" style="margin-bottom: 4px; font-size: 13pt; color: #000; font-weight: bold; border-bottom: 2px solid #000;">
             סיכום חודשי - {{ person['name'] }}
           </div>
           <table>
@@ -1052,55 +1062,29 @@
             </tr>
           </thead>
           <tbody>
-            {# שורות שבת מפוצלות - בסיס 100% ותוספת 50% - רק אם יש קוד מירב נפרד #}
-            {% if monthly_totals.calc150_shabbat_100 and monthly_totals.calc150_shabbat_100 > 0 and codes_map.get('calc150_shabbat_100') %}
-            <tr style="background-color: #e8f5e9;">
-                <td>שעות שבת - בסיס (100%)</td>
-                <td>{{ codes_map.get('calc150_shabbat_100', '') }}</td>
-                <td>{{ (monthly_totals.calc150_shabbat_100 | float / 60) | round(2) }}</td>
-                <td>{{ "%.2f"|format(hourly_rate * 1.0) }} ₪</td>
-                <td>{{ ((monthly_totals.calc150_shabbat_100 | float / 60) * hourly_rate * 1.0) | format_currency }}</td>
-            </tr>
-            <tr style="background-color: #fff3e0;">
-                <td>שעות שבת - תוספת (50%)</td>
-                <td>{{ codes_map.get('calc150_shabbat_50', '') }}</td>
-                <td>{{ (monthly_totals.calc150_shabbat_50 | float / 60) | round(2) }}</td>
-                <td>{{ "%.2f"|format(hourly_rate * 0.5) }} ₪</td>
-                <td>{{ ((monthly_totals.calc150_shabbat_50 | float / 60) * hourly_rate * 0.5) | format_currency }}</td>
-            </tr>
-            {% endif %}
-            
-            {# הצגת סיכום שעות שבת 150% אם יש ערך אבל אין פיצול ל-100% + 50% #}
-            {% set calc150_shabbat_minutes = monthly_totals.get('calc150_shabbat', 0) or 0 %}
-            {% set calc150_shabbat_hours_val = (calc150_shabbat_minutes | float) / 60 %}
-            {% if calc150_shabbat_hours_val > 0.01 and not (monthly_totals.calc150_shabbat_100 and monthly_totals.calc150_shabbat_100 > 0 and codes_map.get('calc150_shabbat_100')) %}
-            <tr>
-              <td>שעות שבת (150%)</td>
-              <td>{{ codes_map.get('calc150_shabbat', '') }}</td>
-              <td>{{ calc150_shabbat_hours_val | round(2) }}</td>
-              <td>{{ "%.2f"|format(hourly_rate * 1.5) }} ₪</td>
-              <td>
-                {% if monthly_totals.get('payment_calc150_shabbat') and monthly_totals.payment_calc150_shabbat > 0 %}
-                  {{ monthly_totals.payment_calc150_shabbat | format_currency }}
-                {% else %}
-                  {{ (calc150_shabbat_hours_val * hourly_rate * 1.5) | format_currency }}
-                {% endif %}
-              </td>
-            </tr>
-            {% endif %}
-            
             {% if payment_codes %}
             {% for code in payment_codes if code.display_order < 200 %}
                 {% set key = code.internal_key %}
                 {% set val = monthly_totals[key] or 0 %}
                 
-                {# דילוג על שעות שבת 150% מפוצלות - רק אם הצגנו אותן מפוצלות למעלה #}
-                {% if key == 'calc150_shabbat_100' or key == 'calc150_shabbat_50' %}
-                    {# skip - already shown as split rows above if codes exist #}
-                {% elif key == 'calc150_shabbat' and monthly_totals.calc150_shabbat_100 and monthly_totals.calc150_shabbat_100 > 0 and codes_map.get('calc150_shabbat_100') %}
-                    {# skip - already shown as split rows above #}
+                {# Decide if to show the row #}
+                {% set should_show = false %}
+                {% if key == 'calc150_shabbat' %}
+                    {# Show combined shabbat only if split codes don't have values or don't exist #}
+                    {% if val > 0 and not (monthly_totals.calc150_shabbat_100 and monthly_totals.calc150_shabbat_100 > 0 and codes_map.get('calc150_shabbat_100')) %}
+                        {% set should_show = true %}
+                    {% endif %}
                 {% elif val > 0 %}
-                    <tr>
+                    {% set should_show = true %}
+                {% endif %}
+
+                {% if should_show %}
+                    {% set row_style = "" %}
+                    {% if key == 'calc150_shabbat_100' %}{% set row_style = "background-color: #e8f5e9;" %}
+                    {% elif key == 'calc150_shabbat_50' %}{% set row_style = "background-color: #fff3e0;" %}
+                    {% endif %}
+                    
+                    <tr style="{{ row_style }}">
                         <td>{{ code.display_name }}</td>
                         <td>{{ code.merav_code or '' }}</td>
                         
@@ -1138,7 +1122,9 @@
                             <td>{{ (val | float / 60) | round(2) }}</td>
 
                             {% set multiplier = 1.0 %}
-                            {% if '125' in key %}{% set multiplier = 1.25 %}
+                            {% if key == 'calc150_shabbat_100' %}{% set multiplier = 1.0 %}
+                            {% elif key == 'calc150_shabbat_50' %}{% set multiplier = 0.5 %}
+                            {% elif '125' in key %}{% set multiplier = 1.25 %}
                             {% elif '150' in key %}{% set multiplier = 1.5 %}
                             {% elif '175' in key %}{% set multiplier = 1.75 %}
                             {% elif '200' in key %}{% set multiplier = 2.0 %}
@@ -1147,10 +1133,16 @@
                             {# For regular hours, always use minimum wage #}
                             <td>{{ "%.2f"|format(hourly_rate * multiplier) }} ₪</td>
                             {% set payment_key = 'payment_' ~ key %}
-                            {% if monthly_totals[payment_key] is defined and monthly_totals[payment_key] > 0 %}
-                            <td>{{ monthly_totals[payment_key] | format_currency }}</td>
+                            
+                            {# Special handling for split shabbat payments if not directly in monthly_totals #}
+                            {% if key == 'calc150_shabbat_100' %}
+                                <td>{{ ((val | float / 60) * hourly_rate * 1.0) | format_currency }}</td>
+                            {% elif key == 'calc150_shabbat_50' %}
+                                <td>{{ ((val | float / 60) * hourly_rate * 0.5) | format_currency }}</td>
+                            {% elif monthly_totals[payment_key] is defined and monthly_totals[payment_key] > 0 %}
+                                <td>{{ monthly_totals[payment_key] | format_currency }}</td>
                             {% else %}
-                            <td>{{ ((val | float / 60) * hourly_rate * multiplier) | format_currency }}</td>
+                                <td>{{ ((val | float / 60) * hourly_rate * multiplier) | format_currency }}</td>
                             {% endif %}
                         {% endif %}
                     </tr>

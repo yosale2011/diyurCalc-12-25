@@ -550,6 +550,29 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         elif h_month == 13: month_name = "אדר ב'"
         hebrew_date_str = f"{to_gematria(h_day)} ב{month_name} {to_gematria(h_year)}"
         
+        # Shabbat / Holiday name
+        special_day_name = ""
+        day_str = day_date.strftime("%Y-%m-%d")
+        
+        # Check current day for holiday or parsha
+        day_info = shabbat_cache.get(day_str)
+        if day_info:
+            if day_info.get("holiday"):
+                special_day_name = day_info["holiday"]
+            elif day_info.get("parsha"):
+                special_day_name = day_info["parsha"]
+        
+        # If Friday and no holiday found, check Saturday for parsha
+        if not special_day_name and day_date.weekday() == 4: # Friday
+            sat_date = day_date + timedelta(days=1)
+            sat_str = sat_date.strftime("%Y-%m-%d")
+            sat_info = shabbat_cache.get(sat_str)
+            if sat_info and sat_info.get("parsha"):
+                special_day_name = sat_info["parsha"]
+        
+        if special_day_name:
+            day_name_he = f"{day_name_he}, {special_day_name}"
+        
         # Sort and Dedup Segments
         # entry["segments"]: (start, end, type, label, shift_id, seg_id, apt_type, married, apt_name, actual_date)
         raw_segments = entry["segments"]
