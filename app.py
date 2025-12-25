@@ -10,6 +10,7 @@ from datetime import datetime
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -51,6 +52,10 @@ templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
 templates.env.filters["human_date"] = human_date
 templates.env.filters["format_currency"] = format_currency
 templates.env.globals["app_version"] = config.VERSION
+
+# Mount static files
+if config.STATIC_DIR:
+    app.mount("/static", StaticFiles(directory=str(config.STATIC_DIR)), name="static")
 
 # Global exception handler for database connection errors
 @app.exception_handler(psycopg2.OperationalError)

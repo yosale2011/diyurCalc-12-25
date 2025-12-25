@@ -55,12 +55,10 @@
       border: none;
     }
 
-    /* Print header */
+    /* Print header - already visible, just ensure it stays */
     .print-header {
       display: block !important;
       margin-bottom: 8px;
-      padding-bottom: 4px;
-      border-bottom: 2px solid #000;
     }
 
     /* Compact header */
@@ -380,8 +378,15 @@
         {% for label, minutes, color in hours_data %}
         {% set hours = (minutes | float / 60) | round(1) %}
         {% if hours > 0 %}
-        <div
-          style="display: flex; align-items: center; gap: 4px; background: {{ color }}15; border: 1px solid {{ color }}30; border-radius: 4px; padding: 2px 8px;">
+        <div style="
+          display: flex;
+          align-items: center;
+          gap: 4px;
+          background-color: {{ color }}15;
+          border: 1px solid {{ color }}30;
+          border-radius: 4px;
+          padding: 2px 8px;
+        ">
           <span style="font-size: 11px; color: {{ color }}; font-weight: 600;">{{ label }}</span>
           <span style="font-size: 13px; font-weight: 700; color: #1e293b;">{{ hours }}</span>
         </div>
@@ -557,35 +562,32 @@
       </section>
 
       <section class="panel panel-chains">
-        <div class="print-header" style="display: none;">
-          <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px;">
-            <!-- Right side: Version then Logo below it (RTL: First child is Right) -->
-            <div style="display: flex; flex-direction: column; align-items: flex-start;">
-              <div style="font-size: 7pt; color: #888; margin-bottom: 2px;">גרסה {{ app_version }}</div>
-              <img src="/static/logo_tzohar.jpg" style="height: 35px; width: auto;" alt="Logo" />
-            </div>
+        <div class="print-header">
+          <!-- Single row: Logo on right, Title in center, Meirav code on left -->
+          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1.5px solid #000; padding-bottom: 3px; margin-bottom: 4px;">
+            <!-- Right side: Logo (RTL: First child is Right) -->
+            <img src="/static/logo_tzohar.jpg" style="height: 30px; width: auto;" alt="Logo" />
 
-            <!-- Left side: Page number (RTL: Last child is Left) -->
-            <div style="font-size: 7pt; color: #888;" class="page-number"></div>
-          </div>
+            <!-- Center: Title -->
+            <h1 style="margin: 0; font-size: 16pt; text-align: center; flex-grow: 1;">דוח פירוט רצפים - {{ person['name'] }}</h1>
 
-          <div
-            style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1.5px solid #000; padding-bottom: 3px;">
-            <div style="width: 120px;"></div> <!-- Spacer for symmetry -->
-            <h1 style="margin: 0; font-size: 16pt; text-align: center; flex-grow: 1;">דוח פירוט רצפים - {{
-              person['name'] }}</h1>
+            <!-- Left side: Meirav code or spacer -->
             {% if person['meirav_code'] %}
-            <div
-              style="font-size: 13pt; font-weight: bold; border: 2px solid #000; padding: 2px 8px; min-width: 80px; text-align: center;">
+            <div style="font-size: 13pt; font-weight: bold; border: 2px solid #000; padding: 2px 8px; min-width: 80px; text-align: center;">
               מירב: {{ person['meirav_code'] }}
             </div>
+            {% else %}
+            <div style="width: 80px;"></div>
             {% endif %}
           </div>
 
-          <div style="text-align: center; font-size: 10pt; margin: 2px 0;">חודש: {{ "%02d"|format(selected_month) }}/{{
-            selected_year }}</div>
+          <!-- Second row: Month and page number -->
+          <div style="display: flex; justify-content: space-between; align-items: center; font-size: 10pt; margin-bottom: 8px;">
+            <div>חודש: {{ "%02d"|format(selected_month) }}/{{ selected_year }}</div>
+            <div style="font-size: 7pt; color: #888;" class="page-number"></div>
+          </div>
         </div>
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+        <div class="no-print" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
           <h2 style="margin: 0; font-size: 20px;">דוח פירוט רצפים</h2>
           <div style="display: flex; gap: 8px;">
             <button type="button" id="toggleStandbyBtn" onclick="toggleStandby()"
