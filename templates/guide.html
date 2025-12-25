@@ -181,6 +181,12 @@
       border: 0.5px solid #000;
     }
 
+    /* Highlight the total payment cell in summary row */
+    .panel-chains table tbody tr:last-child td:nth-child(4) {
+      font-size: 7.5pt !important;
+      color: #1a365d !important;
+    }
+
     /* Compact cancelled standbys */
     .panel-chains>div>div[style*="background: #fef2f2"] {
       font-size: 5.5pt;
@@ -700,7 +706,7 @@
                 <td colspan="3" style="text-align: right; padding: 4px 6px;">
                   <strong>סיכום:</strong>
                 </td>
-                <td style="text-align: center; padding: 4px 6px; font-weight: bold; font-size: 0.9em;">
+                <td style="text-align: center; padding: 4px 6px; font-weight: bold; font-size: 1.1em; color: #1a365d;">
                   {{ "%.2f"|format((day.payment or 0) + (day.standby_payment or 0)) }}
                 </td>
                 <td style="text-align: center; padding: 4px 6px;">
