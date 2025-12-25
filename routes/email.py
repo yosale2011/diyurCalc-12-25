@@ -116,11 +116,19 @@ async def test_email_settings(request: Request) -> JSONResponse:
         return JSONResponse({"success": False, "error": str(e)})
 
 
-def send_guide_email_route(request: Request, person_id: int, year: int, month: int) -> JSONResponse:
-    """Send guide report email to a specific person."""
+async def send_guide_email_route(request: Request, person_id: int, year: int, month: int) -> JSONResponse:
+    """Send guide report email to a specific person or custom email."""
     try:
+        # Try to get custom email from request body
+        custom_email = None
+        try:
+            body = await request.json()
+            custom_email = body.get('email')
+        except:
+            pass
+
         with get_conn() as conn:
-            result = send_guide_email(conn, person_id, year, month)
+            result = send_guide_email(conn, person_id, year, month, custom_email)
         return JSONResponse(result)
     except Exception as e:
         logger.error(f"Error in send_guide_email_route: {e}", exc_info=True)

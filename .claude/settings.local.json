@@ -16,7 +16,8 @@
       "Bash(del \"f:\\\\DiyurClock\\\\105\\\\diyur003\\\\debug_gap.py\" \"f:\\\\DiyurClock\\\\105\\\\diyur003\\\\debug_gap2.py\" \"f:\\\\DiyurClock\\\\105\\\\diyur003\\\\debug_gap3.py\" \"f:\\\\DiyurClock\\\\105\\\\diyur003\\\\debug_gap4.py\" \"f:\\\\DiyurClock\\\\105\\\\diyur003\\\\debug_gap5.py\" \"f:\\\\DiyurClock\\\\105\\\\diyur003\\\\debug_gap6.py\" \"f:\\\\DiyurClock\\\\105\\\\diyur003\\\\debug_gap7.py\" \"f:\\\\DiyurClock\\\\105\\\\diyur003\\\\debug_gap8.py\" \"f:\\\\DiyurClock\\\\105\\\\diyur003\\\\debug_gap9.py\" \"f:\\\\DiyurClock\\\\105\\\\diyur003\\\\debug_gap10.py\")",
       "Bash(cd:*)",
       "Bash(del \"f:\\\\DiyurClock\\\\105\\\\diyur003\\\\check_shift.py\")",
-      "Bash(findstr:*)"
+      "Bash(findstr:*)",
+      "Bash(pip install:*)"
     ],
     "deny": [],
     "ask": []

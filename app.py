@@ -227,9 +227,9 @@ async def send_test_email_api(request: Request):
 
 
 @app.post("/api/send-guide-email/{person_id}")
-def send_guide_email_api(request: Request, person_id: int, year: int, month: int):
+async def send_guide_email_api(request: Request, person_id: int, year: int, month: int):
     """Send guide report email to a specific person."""
-    return send_guide_email_route(request, person_id, year, month)
+    return await send_guide_email_route(request, person_id, year, month)
 
 
 @app.post("/api/send-all-guides-email")

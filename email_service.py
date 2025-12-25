@@ -190,6 +190,8 @@ def send_test_email(conn, to_email: str) -> Dict[str, Any]:
 
 def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[bytes]:
     """Generate PDF for guide report."""
+    import re
+
     try:
         from starlette.testclient import TestClient
         from app import app
@@ -204,6 +206,15 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
 
         html_content = response.text
 
+        # Remove CSS rules that xhtml2pdf doesn't support (sibling selectors, :checked, etc.)
+        # Remove rules with ~ (sibling selector) and :checked pseudo-selector
+        html_content = re.sub(r'#tab-[^{]+:checked[^{]*\{[^}]*\}', '', html_content)
+        # Remove @keyframes rules
+        html_content = re.sub(r'@keyframes[^{]+\{[^}]*\{[^}]*\}[^}]*\}', '', html_content)
+        # Remove rules with animation property that might cause issues
+        html_content = re.sub(r'\.tabs\s+input\[type=radio\][^{]*\{[^}]*\}', '', html_content)
+        html_content = re.sub(r'\.tabs\s+label[^{]*\{[^}]*\}', '', html_content)
+
         # Add PDF-specific CSS for xhtml2pdf
         pdf_css = """
         <style>
@@ -216,7 +227,7 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
                 font-family: Arial, sans-serif;
                 font-size: 10pt;
             }
-            .no-print, .controls, nav, .print-btn, button, form, .tabs {
+            .no-print, .controls, nav, .print-btn, button, form, .tabs, header {
                 display: none !important;
             }
             .card {
@@ -232,6 +243,7 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
                 padding: 4px;
                 text-align: right;
             }
+            .panel { display: block !important; }
         </style>
         """
 
@@ -326,8 +338,8 @@ def send_email_with_pdf(
         return {"success": False, "error": str(e)}
 
 
-def send_guide_email(conn, person_id: int, year: int, month: int) -> Dict[str, Any]:
-    """Send guide report email to a specific person."""
+def send_guide_email(conn, person_id: int, year: int, month: int, custom_email: Optional[str] = None) -> Dict[str, Any]:
+    """Send guide report email to a specific person or custom email address."""
     try:
         # Get email settings
         settings = get_email_settings(conn)
@@ -343,7 +355,10 @@ def send_guide_email(conn, person_id: int, year: int, month: int) -> Dict[str, A
         if not person:
             return {"success": False, "error": "מדריך לא נמצא"}
 
-        if not person['email']:
+        # Use custom email if provided, otherwise use person's email
+        target_email = custom_email if custom_email else person['email']
+
+        if not target_email:
             return {"success": False, "error": f"למדריך {person['name']} אין כתובת מייל"}
 
         # Generate PDF
@@ -365,7 +380,7 @@ def send_guide_email(conn, person_id: int, year: int, month: int) -> Dict[str, A
         # Send email
         result = send_email_with_pdf(
             settings=settings,
-            to_email=person['email'],
+            to_email=target_email,
             to_name=person['name'],
             subject=subject,
             body=body,
@@ -374,7 +389,7 @@ def send_guide_email(conn, person_id: int, year: int, month: int) -> Dict[str, A
         )
 
         if result['success']:
-            return {"success": True, "message": f"המייל נשלח בהצלחה ל-{person['email']}"}
+            return {"success": True, "message": f"המייל נשלח בהצלחה ל-{target_email}"}
         else:
             return result
 

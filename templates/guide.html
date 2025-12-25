@@ -1338,8 +1338,18 @@
   async function sendEmail() {
     const btn = document.getElementById('sendEmailBtn');
     const originalText = btn.innerText;
+    const defaultEmail = '{{ person.email or "" }}';
 
-    if (!confirm('לשלוח את הדוח במייל למדריך?')) {
+    // Prompt for email with default value
+    const targetEmail = prompt('לאיזה מייל לשלוח את הדוח?', defaultEmail);
+
+    // User cancelled or empty input
+    if (targetEmail === null) {
+      return;
+    }
+
+    if (!targetEmail.trim()) {
+      alert('יש להזין כתובת מייל');
       return;
     }
 
@@ -1352,7 +1362,11 @@
       const month = {{ selected_month }};
 
       const response = await fetch(`/api/send-guide-email/${personId}?year=${year}&month=${month}`, {
-        method: 'POST'
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ email: targetEmail.trim() })
       });
 
       const result = await response.json();

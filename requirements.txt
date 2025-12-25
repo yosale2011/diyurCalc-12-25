@@ -17,4 +17,5 @@ psutil==5.9.8
 
 # PDF generation for email reports
 xhtml2pdf>=0.2.11
+httpx>=0.25.0
 
