@@ -206,16 +206,16 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
 
         html_content = response.text
 
-        # Remove CSS rules that xhtml2pdf doesn't support (sibling selectors, :checked, etc.)
-        # Remove rules with ~ (sibling selector) and :checked pseudo-selector
-        html_content = re.sub(r'#tab-[^{]+:checked[^{]*\{[^}]*\}', '', html_content)
-        # Remove @keyframes rules
-        html_content = re.sub(r'@keyframes[^{]+\{[^}]*\{[^}]*\}[^}]*\}', '', html_content)
-        # Remove rules with animation property that might cause issues
-        html_content = re.sub(r'\.tabs\s+input\[type=radio\][^{]*\{[^}]*\}', '', html_content)
-        html_content = re.sub(r'\.tabs\s+label[^{]*\{[^}]*\}', '', html_content)
+        # Remove ALL style tags - xhtml2pdf has issues with modern CSS
+        html_content = re.sub(r'<style[^>]*>.*?</style>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
 
-        # Add PDF-specific CSS for xhtml2pdf
+        # Remove script tags
+        html_content = re.sub(r'<script[^>]*>.*?</script>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+
+        # Remove header element
+        html_content = re.sub(r'<header[^>]*>.*?</header>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+
+        # Simple PDF-compatible CSS for xhtml2pdf
         pdf_css = """
         <style>
             @page {
@@ -227,23 +227,39 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
                 font-family: Arial, sans-serif;
                 font-size: 10pt;
             }
-            .no-print, .controls, nav, .print-btn, button, form, .tabs, header {
-                display: none !important;
+            .controls, nav, button, form, .tabs, .no-print {
+                display: none;
             }
             .card {
-                box-shadow: none !important;
                 border: 1px solid #ddd;
+                padding: 10px;
+                margin-bottom: 10px;
             }
             table {
                 width: 100%;
                 border-collapse: collapse;
+                margin-bottom: 10px;
             }
             th, td {
                 border: 1px solid #ccc;
                 padding: 4px;
                 text-align: right;
             }
-            .panel { display: block !important; }
+            th {
+                background: #f2f4f7;
+                font-weight: bold;
+            }
+            .panel {
+                display: block;
+            }
+            .pill {
+                background: #e8f0ff;
+                padding: 2px 6px;
+                border-radius: 4px;
+            }
+            h2, h3 {
+                margin: 10px 0;
+            }
         </style>
         """
 
