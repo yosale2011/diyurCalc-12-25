@@ -26,7 +26,11 @@ from utils import human_date
 from utils import calculate_accruals, format_currency
 from routes.home import home
 from routes.guide import simple_summary_view, guide_view
-from routes.admin import manage_payment_codes, update_payment_codes, demo_sync_page, sync_demo_database, demo_sync_status
+from routes.admin import (
+    manage_payment_codes, update_payment_codes,
+    demo_sync_page, sync_demo_database, demo_sync_status,
+    get_month_lock_status, lock_month_api, unlock_month_api
+)
 from routes.summary import general_summary
 from routes.export import (
     export_gesher,
@@ -196,6 +200,25 @@ async def sync_demo_route(request: Request):
 def demo_sync_status_route(request: Request):
     """Get demo database status."""
     return demo_sync_status(request)
+
+
+# Month Lock APIs
+@app.get("/api/month-lock/{year}/{month}")
+def get_month_lock_route(request: Request, year: int, month: int):
+    """Get month lock status."""
+    return get_month_lock_status(request, year, month)
+
+
+@app.post("/api/month-lock")
+async def lock_month_route(request: Request):
+    """Lock a month."""
+    return await lock_month_api(request)
+
+
+@app.post("/api/month-unlock")
+async def unlock_month_route(request: Request):
+    """Unlock a month."""
+    return await unlock_month_api(request)
 
 
 @app.get("/summary", response_class=HTMLResponse)

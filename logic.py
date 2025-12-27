@@ -192,23 +192,36 @@ def get_minimum_wage(conn) -> float:
         return DEFAULT_MINIMUM_WAGE
 
 
-def get_standby_rate(conn, segment_id: int, apartment_type_id: int | None, is_married: bool) -> float:
+def get_standby_rate(conn, segment_id: int, apartment_type_id: int | None, is_married: bool, year: int = None, month: int = None) -> float:
     """
     Get standby rate from standby_rates table.
     Priority: specific apartment_type (priority=10) > general (priority=0)
-    
+    If year/month provided, checks historical rates first.
+
     Args:
         conn: Database connection
         segment_id: ID of the standby segment from shift_time_segments
         apartment_type_id: Type of apartment (None for general)
         is_married: True if person is married, False if single
-    
+        year: Optional year for historical lookup
+        month: Optional month for historical lookup
+
     Returns:
         Standby rate in shekels (amount / 100)
     """
     marital_status = "married" if is_married else "single"
+
+    # If year/month provided, try historical rates first
+    if year is not None and month is not None:
+        from history import get_standby_rate_for_month
+        historical_amount = get_standby_rate_for_month(
+            conn, segment_id, apartment_type_id, marital_status, year, month
+        )
+        if historical_amount is not None:
+            return float(historical_amount) / 100
+
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    
+
     # First try to find specific rate for apartment type (priority=10)
     if apartment_type_id is not None:
         cursor.execute("""
@@ -220,7 +233,7 @@ def get_standby_rate(conn, segment_id: int, apartment_type_id: int | None, is_ma
         if row:
             cursor.close()
             return float(row["amount"]) / 100
-    
+
     # Fallback to general rate (priority=0, apartment_type_id IS NULL)
     cursor.execute("""
         SELECT amount FROM standby_rates
@@ -229,10 +242,10 @@ def get_standby_rate(conn, segment_id: int, apartment_type_id: int | None, is_ma
     """, (segment_id, marital_status))
     row = cursor.fetchone()
     cursor.close()
-    
+
     if row:
         return float(row["amount"]) / 100
-    
+
     # Default fallback if nothing found
     return DEFAULT_STANDBY_RATE
 
@@ -1554,7 +1567,33 @@ def calculate_person_monthly_totals(
         WHERE tr.person_id = %s AND tr.date >= %s AND tr.date < %s
         ORDER BY tr.date, tr.start_time
     """, (person_id, start_ts, end_ts))
-    reports = cursor.fetchall()
+    reports_raw = cursor.fetchall()
+
+    # Override with historical data if available
+    from history import get_person_status_for_month, get_apartment_type_for_month
+    historical_person = get_person_status_for_month(conn, person_id, year, month)
+    historical_is_married = historical_person.get("is_married")
+
+    # Build apartment historical cache
+    apartment_ids = {r["apartment_id"] for r in reports_raw if r["apartment_id"]}
+    apartment_type_cache = {}
+    for apt_id in apartment_ids:
+        hist_type = get_apartment_type_for_month(conn, apt_id, year, month)
+        if hist_type is not None:
+            apartment_type_cache[apt_id] = hist_type
+
+    # Apply historical overrides to reports
+    reports = []
+    for r in reports_raw:
+        r_dict = dict(r)
+        # Override is_married with historical value if available
+        if historical_is_married is not None:
+            r_dict["is_married"] = historical_is_married
+        # Override apartment_type_id with historical value if available
+        apt_id = r_dict.get("apartment_id")
+        if apt_id and apt_id in apartment_type_cache:
+            r_dict["apartment_type_id"] = apartment_type_cache[apt_id]
+        reports.append(r_dict)
 
     # אתחול סיכומים - תמיד, גם אם אין דיווחי שעות
     monthly_totals = {
@@ -1599,9 +1638,9 @@ def calculate_person_monthly_totals(
                 dates_with_standby.add(r["date"])
         monthly_totals["standby"] = len(dates_with_standby)
 
-        # פונקציה לקבלת תעריף כוננות מDB
+        # פונקציה לקבלת תעריף כוננות מDB (כולל נתונים היסטוריים)
         def get_standby_rate_from_db(seg_id: int, apt_type: Optional[int], is_married: bool) -> float:
-            return get_standby_rate(conn, seg_id, apt_type, is_married)
+            return get_standby_rate(conn, seg_id, apt_type, is_married, year, month)
 
         # עיבוד מפת הימים באמצעות הפונקציה המשותפת
         totals, work_days_set, vacation_days_set = _process_daily_map(
@@ -1861,7 +1900,7 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
     # 3. Time Reports (bulk)
     start_ts, end_ts = month_range_ts(year, month)
     cursor.execute("""
-        SELECT tr.*, st.name as shift_name, 
+        SELECT tr.*, st.name as shift_name,
                st.rate AS shift_rate,
                st.is_minimum_wage AS shift_is_minimum_wage,
                a.apartment_type_id,
@@ -1873,14 +1912,48 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
         WHERE tr.date >= %s AND tr.date < %s
         ORDER BY tr.person_id, tr.date, tr.start_time
     """, (start_ts, end_ts))
-    all_reports = cursor.fetchall()
-    
+    all_reports_raw = cursor.fetchall()
+
+    # Load historical data for overrides
+    from history import get_person_status_for_month, get_apartment_type_for_month
+
+    # Build person historical cache
+    person_ids = {r["person_id"] for r in all_reports_raw if r["person_id"]}
+    person_status_cache = {}
+    for pid in person_ids:
+        hist = get_person_status_for_month(conn, pid, year, month)
+        if hist.get("is_married") is not None:
+            person_status_cache[pid] = hist
+
+    # Build apartment historical cache
+    apartment_ids = {r["apartment_id"] for r in all_reports_raw if r["apartment_id"]}
+    apartment_type_cache = {}
+    for apt_id in apartment_ids:
+        hist_type = get_apartment_type_for_month(conn, apt_id, year, month)
+        if hist_type is not None:
+            apartment_type_cache[apt_id] = hist_type
+
+    # Apply historical overrides
     reports_by_person = {}
     shift_type_ids = set()
-    for r in all_reports:
-        reports_by_person.setdefault(r["person_id"], []).append(r)
-        if r["shift_type_id"]:
-            shift_type_ids.add(r["shift_type_id"])
+    for r in all_reports_raw:
+        r_dict = dict(r)
+        pid = r_dict.get("person_id")
+        apt_id = r_dict.get("apartment_id")
+
+        # Override is_married with historical value if available
+        if pid and pid in person_status_cache:
+            hist_married = person_status_cache[pid].get("is_married")
+            if hist_married is not None:
+                r_dict["is_married"] = hist_married
+
+        # Override apartment_type_id with historical value if available
+        if apt_id and apt_id in apartment_type_cache:
+            r_dict["apartment_type_id"] = apartment_type_cache[apt_id]
+
+        reports_by_person.setdefault(pid, []).append(r_dict)
+        if r_dict["shift_type_id"]:
+            shift_type_ids.add(r_dict["shift_type_id"])
             
     # 4. Shift Segments
     segments_by_shift = {}
@@ -1917,13 +1990,31 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
     for pc in all_payment_comps:
         payment_comps_by_person.setdefault(pc["person_id"], []).append(pc)
 
-    # 6. Standby Rates
-    cursor.execute("SELECT * FROM standby_rates")
-    all_standby_rates = cursor.fetchall()
+    # 6. Standby Rates - first check historical, then fallback to current
     standby_rates_cache = {}
-    for row in all_standby_rates:
-        key = (row["segment_id"], row["apartment_type_id"], row["marital_status"], row["priority"])
-        standby_rates_cache[key] = float(row["amount"]) / 100
+
+    # Check for historical standby rates first
+    cursor.execute("""
+        SELECT segment_id, apartment_type_id, marital_status, amount
+        FROM standby_rates_history
+        WHERE year = %s AND month = %s
+    """, (year, month))
+    historical_rates = cursor.fetchall()
+
+    if historical_rates:
+        # Use historical rates
+        for row in historical_rates:
+            # Historical rates use priority 10 for apartment-specific, 0 for general
+            priority = 10 if row["apartment_type_id"] is not None else 0
+            key = (row["segment_id"], row["apartment_type_id"], row["marital_status"], priority)
+            standby_rates_cache[key] = float(row["amount"]) / 100
+    else:
+        # Use current rates
+        cursor.execute("SELECT * FROM standby_rates")
+        all_standby_rates = cursor.fetchall()
+        for row in all_standby_rates:
+            key = (row["segment_id"], row["apartment_type_id"], row["marital_status"], row["priority"])
+            standby_rates_cache[key] = float(row["amount"]) / 100
 
     # 7. Min Wage & Shabbat
     shabbat_cache = get_shabbat_times_cache(conn)

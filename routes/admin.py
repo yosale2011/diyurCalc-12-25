@@ -159,3 +159,69 @@ def demo_sync_status(request: Request) -> JSONResponse:
     """Get demo database status."""
     status = check_demo_database_status()
     return JSONResponse(status)
+
+
+# Month Lock APIs
+def get_month_lock_status(request: Request, year: int, month: int) -> JSONResponse:
+    """Get lock status for a specific month."""
+    from history import get_month_lock_info, is_month_locked
+    with get_conn() as conn:
+        locked = is_month_locked(conn.conn, year, month)
+        lock_info = get_month_lock_info(conn.conn, year, month) if locked else None
+    return JSONResponse({
+        "year": year,
+        "month": month,
+        "locked": locked,
+        "lock_info": lock_info
+    })
+
+
+async def lock_month_api(request: Request) -> JSONResponse:
+    """Lock a month to prevent changes."""
+    from history import lock_month
+    try:
+        data = await request.json()
+        year = data.get("year")
+        month = data.get("month")
+        locked_by = data.get("locked_by", 1)  # Default to admin user
+        notes = data.get("notes", "")
+
+        if not year or not month:
+            return JSONResponse({"success": False, "error": "year and month are required"}, status_code=400)
+
+        with get_conn() as conn:
+            success = lock_month(conn.conn, year, month, locked_by, notes)
+
+        if success:
+            return JSONResponse({"success": True, "message": f"חודש {month}/{year} ננעל בהצלחה"})
+        else:
+            return JSONResponse({"success": False, "error": "החודש כבר נעול"}, status_code=400)
+
+    except Exception as e:
+        logger.error(f"Error locking month: {e}", exc_info=True)
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+async def unlock_month_api(request: Request) -> JSONResponse:
+    """Unlock a month to allow changes."""
+    from history import unlock_month
+    try:
+        data = await request.json()
+        year = data.get("year")
+        month = data.get("month")
+        unlocked_by = data.get("unlocked_by", 1)  # Default to admin user
+
+        if not year or not month:
+            return JSONResponse({"success": False, "error": "year and month are required"}, status_code=400)
+
+        with get_conn() as conn:
+            success = unlock_month(conn.conn, year, month, unlocked_by)
+
+        if success:
+            return JSONResponse({"success": True, "message": f"חודש {month}/{year} נפתח בהצלחה"})
+        else:
+            return JSONResponse({"success": False, "error": "החודש לא נעול"}, status_code=400)
+
+    except Exception as e:
+        logger.error(f"Error unlocking month: {e}", exc_info=True)
+        return JSONResponse({"success": False, "error": str(e)}, status_code=500)

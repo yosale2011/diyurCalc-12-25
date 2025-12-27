@@ -40,6 +40,11 @@ TABLES_ORDER = [
     "time_reports",
     "email_settings",
     "login_logs",
+    # History tables
+    "person_status_history",
+    "apartment_status_history",
+    "month_locks",
+    "standby_rates_history",
 ]
 
 
