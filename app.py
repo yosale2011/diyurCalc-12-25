@@ -300,15 +300,25 @@ def send_all_guides_email_api(request: Request, year: int, month: int):
 
 
 @app.post("/api/toggle-demo-mode")
-def toggle_demo_mode(request: Request):
+async def toggle_demo_mode(request: Request):
     """Toggle between demo and production database."""
+    # Verify password
+    try:
+        body = await request.json()
+        password = body.get("password", "")
+    except:
+        password = ""
+
+    if password != "8942798":
+        return JSONResponse({"success": False, "error": "סיסמה שגויה"}, status_code=401)
+
     current_demo = get_demo_mode_from_cookie(request)
     new_demo = not current_demo
 
     response = JSONResponse({
         "success": True,
         "demo_mode": new_demo,
-        "db_name": "דמו" if new_demo else "ייצור"
+        "db_name": "פיתוח" if new_demo else "עבודה"
     })
 
     # Set cookie (expires in 24 hours)
@@ -329,7 +339,7 @@ def demo_mode_status(request: Request):
     demo = get_demo_mode_from_cookie(request)
     return {
         "demo_mode": demo,
-        "db_name": "דמו" if demo else "ייצור"
+        "db_name": "פיתוח" if demo else "עבודה"
     }
 
 

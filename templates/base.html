@@ -268,30 +268,40 @@
 
         if (isDemo) {
             indicator.style.background = '#ffc107';
-            label.textContent = 'דמו';
+            label.textContent = 'פיתוח';
             btn.style.background = 'rgba(255, 193, 7, 0.3)';
             btn.style.borderColor = '#ffc107';
             header.classList.add('demo-mode');
-            dbDisplay.textContent = 'מסד: diyurdemodb (דמו)';
+            dbDisplay.textContent = 'מסד: diyurdemodb (פיתוח)';
         } else {
             indicator.style.background = '#28a745';
-            label.textContent = 'ייצור';
+            label.textContent = 'עבודה';
             btn.style.background = 'transparent';
             btn.style.borderColor = '#fff';
             header.classList.remove('demo-mode');
-            dbDisplay.textContent = 'מסד: defaultdb (ייצור)';
+            dbDisplay.textContent = 'מסד: defaultdb (עבודה)';
         }
     }
 
     async function toggleDemoMode() {
+        // Prompt for password with hint
+        const password = prompt('הזן סיסמה למעבר בין מצבים:\n(רמז: סיסמת WIFI)');
+        if (password === null) return; // User cancelled
+
         try {
-            const response = await fetch('/api/toggle-demo-mode', { method: 'POST' });
+            const response = await fetch('/api/toggle-demo-mode', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password: password })
+            });
             const data = await response.json();
 
             if (data.success) {
                 updateDemoUI(data.demo_mode);
                 // Reload the page to reflect new database
                 window.location.reload();
+            } else {
+                alert(data.error || 'סיסמה שגויה');
             }
         } catch (err) {
             console.error('Failed to toggle demo mode:', err);

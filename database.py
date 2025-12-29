@@ -121,12 +121,16 @@ class PostgresConnection:
         return self.conn.cursor(*args, **kwargs)
 
     def commit(self):
-        self.conn.commit()
+        if not self.conn.closed:
+            self.conn.commit()
 
     def rollback(self):
-        self.conn.rollback()
+        if not self.conn.closed:
+            self.conn.rollback()
 
     def close(self):
+        if self.conn.closed:
+            return
         if self._use_pool:
             return_connection(self.conn, self._is_demo)
         else:
@@ -136,6 +140,8 @@ class PostgresConnection:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
+        if self.conn.closed:
+            return
         if exc_type is not None:
             self.rollback()
         else:
@@ -154,5 +160,5 @@ def get_conn() -> PostgresConnection:
 def get_current_db_name() -> str:
     """Get the name of the current database (for display purposes)."""
     if is_demo_mode():
-        return "דמו"
-    return "ייצור"
+        return "פיתוח"
+    return "עבודה"
