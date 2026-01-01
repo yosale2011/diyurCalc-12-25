@@ -299,22 +299,31 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
             logger.error("No suitable browser (Edge/Chrome) found for PDF generation")
             return None
 
-        # 6. Run Edge against the FILE
-        # Windows file path to URI
-        file_url = f"file:///{temp_html_path.replace(os.sep, '/')}"
-        
         cmd = [
             browser_exe,
             "--headless",
             "--disable-gpu",
+            "--run-all-compositor-stages-before-draw",
             "--no-pdf-header-footer",
             f"--print-to-pdf={temp_pdf_path}",
-            file_url
+            temp_html_path
         ]
-        
-        logger.info(f"Generating PDF using Edge from local file: {file_url}")
-        
-        result = subprocess.run(cmd, capture_output=True, timeout=15)
+
+        logger.info(f"Generating PDF using Edge from local file: {temp_html_path}")
+        logger.info(f"Running Edge command: {cmd}")
+        result = subprocess.run(cmd, capture_output=True, timeout=30)
+
+        logger.info(f"Edge return code: {result.returncode}")
+        if result.stdout:
+            logger.info(f"Edge stdout: {result.stdout.decode('utf-8', errors='ignore')}")
+        if result.stderr:
+            logger.info(f"Edge stderr: {result.stderr.decode('utf-8', errors='ignore')}")
+
+        # Check PDF before cleanup
+        pdf_exists = os.path.exists(temp_pdf_path)
+        pdf_size = os.path.getsize(temp_pdf_path) if pdf_exists else 0
+        logger.info(f"PDF check - exists: {pdf_exists}, size: {pdf_size}, path: {temp_pdf_path}")
+
         
         # Cleanup HTML file
         try:
@@ -326,7 +335,8 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
             logger.error(f"Edge PDF generation error: {result.stderr.decode('utf-8', errors='ignore')}")
             # Continue to check if file exists anyway
 
-        if os.path.exists(temp_pdf_path) and os.path.getsize(temp_pdf_path) > 0:
+        if pdf_exists and pdf_size > 0:
+
             with open(temp_pdf_path, "rb") as f:
                 pdf_bytes = f.read()
             try:
