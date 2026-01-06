@@ -304,6 +304,7 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
             "--headless",
             "--disable-gpu",
             "--run-all-compositor-stages-before-draw",
+            "--virtual-time-budget=10000",
             "--no-pdf-header-footer",
             f"--print-to-pdf={temp_pdf_path}",
             temp_html_path
@@ -311,7 +312,11 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
 
         logger.info(f"Generating PDF using Edge from local file: {temp_html_path}")
         logger.info(f"Running Edge command: {cmd}")
-        result = subprocess.run(cmd, capture_output=True, timeout=30)
+        result = subprocess.run(cmd, capture_output=True, timeout=45)
+
+        # Wait for Edge to finish writing the PDF file
+        import time
+        time.sleep(2)
 
         logger.info(f"Edge return code: {result.returncode}")
         if result.stdout:

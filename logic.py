@@ -1534,13 +1534,21 @@ def calculate_person_monthly_totals(
     year: int,
     month: int,
     shabbat_cache: Dict[str, Dict[str, str]],
-    minimum_wage: float = DEFAULT_MINIMUM_WAGE
+    minimum_wage: float = None  # If None, will be fetched from history
 ) -> Dict:
     """
     חישוב מדויק של סיכומים חודשיים לעובד.
     """
     from utils import month_range_ts, calculate_accruals
+    from history import (get_person_status_for_month, get_apartment_type_for_month,
+                         get_all_shift_rates_for_month, get_minimum_wage_for_month,
+                         get_all_segments_for_month)
+    
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    
+    # Get minimum wage for the specific month (historical)
+    if minimum_wage is None:
+        minimum_wage = get_minimum_wage_for_month(conn, year, month)
     
     # שליפת פרטי העובד
     cursor.execute("""
@@ -1570,7 +1578,6 @@ def calculate_person_monthly_totals(
     reports_raw = cursor.fetchall()
 
     # Override with historical data if available
-    from history import get_person_status_for_month, get_apartment_type_for_month
     historical_person = get_person_status_for_month(conn, person_id, year, month)
     historical_is_married = historical_person.get("is_married")
 
@@ -1581,6 +1588,9 @@ def calculate_person_monthly_totals(
         hist_type = get_apartment_type_for_month(conn, apt_id, year, month)
         if hist_type is not None:
             apartment_type_cache[apt_id] = hist_type
+
+    # Build shift rates historical cache
+    shift_rates_cache = get_all_shift_rates_for_month(conn, year, month)
 
     # Apply historical overrides to reports
     reports = []
@@ -1593,6 +1603,12 @@ def calculate_person_monthly_totals(
         apt_id = r_dict.get("apartment_id")
         if apt_id and apt_id in apartment_type_cache:
             r_dict["apartment_type_id"] = apartment_type_cache[apt_id]
+        # Override shift rate with historical value if available
+        shift_type_id = r_dict.get("shift_type_id")
+        if shift_type_id and shift_type_id in shift_rates_cache:
+            rate_info = shift_rates_cache[shift_type_id]
+            r_dict["shift_rate"] = rate_info.get("rate")
+            r_dict["shift_is_minimum_wage"] = rate_info.get("is_minimum_wage")
         reports.append(r_dict)
 
     # אתחול סיכומים - תמיד, גם אם אין דיווחי שעות
@@ -1608,21 +1624,11 @@ def calculate_person_monthly_totals(
 
     # עיבוד דיווחי שעות - רק אם יש דיווחים
     if reports:
-        # שליפת מקטעי משמרות
-        shift_ids = {r["shift_type_id"] for r in reports if r["shift_type_id"]}
-        segments_by_shift = {}
-        if shift_ids:
-            placeholders = ",".join(["%s"] * len(shift_ids))
-            cursor.execute(
-                f"""SELECT id, shift_type_id, start_time, end_time, wage_percent, segment_type, order_index
-                    FROM shift_time_segments
-                    WHERE shift_type_id IN ({placeholders})
-                    ORDER BY order_index""",
-                tuple(shift_ids)
-            )
-            segs = cursor.fetchall()
-            for s in segs:
-                segments_by_shift.setdefault(s["shift_type_id"], []).append(s)
+        # שליפת מקטעי משמרות - עם תמיכה בהיסטוריה
+        shift_ids = list({r["shift_type_id"] for r in reports if r["shift_type_id"]})
+        
+        # Use historical segments if available, otherwise current segments
+        segments_by_shift = get_all_segments_for_month(conn, shift_ids, year, month)
 
         # זיהוי משמרות עם כוננות
         shift_has_standby = {sid: any(s["segment_type"] == "standby" for s in segs)
@@ -1888,6 +1894,9 @@ def _calculate_totals_from_data(
 def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], Dict]:
     # Import month_range_ts locally to avoid circular imports
     from utils import month_range_ts
+    from history import (get_person_status_for_month, get_apartment_type_for_month,
+                         get_all_shift_rates_for_month, get_minimum_wage_for_month,
+                         get_all_segments_for_month)
     
     # 1. Fetch Payment Codes
     payment_codes = get_payment_codes(conn)
@@ -1915,7 +1924,6 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
     all_reports_raw = cursor.fetchall()
 
     # Load historical data for overrides
-    from history import get_person_status_for_month, get_apartment_type_for_month
 
     # Build person historical cache
     person_ids = {r["person_id"] for r in all_reports_raw if r["person_id"]}
@@ -1933,6 +1941,9 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
         if hist_type is not None:
             apartment_type_cache[apt_id] = hist_type
 
+    # Build shift rates historical cache
+    shift_rates_cache = get_all_shift_rates_for_month(conn, year, month)
+
     # Apply historical overrides
     reports_by_person = {}
     shift_type_ids = set()
@@ -1940,6 +1951,7 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
         r_dict = dict(r)
         pid = r_dict.get("person_id")
         apt_id = r_dict.get("apartment_id")
+        shift_type_id = r_dict.get("shift_type_id")
 
         # Override is_married with historical value if available
         if pid and pid in person_status_cache:
@@ -1951,24 +1963,22 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
         if apt_id and apt_id in apartment_type_cache:
             r_dict["apartment_type_id"] = apartment_type_cache[apt_id]
 
+        # Override shift rate with historical value if available
+        if shift_type_id and shift_type_id in shift_rates_cache:
+            rate_info = shift_rates_cache[shift_type_id]
+            r_dict["shift_rate"] = rate_info.get("rate")
+            r_dict["shift_is_minimum_wage"] = rate_info.get("is_minimum_wage")
+
         reports_by_person.setdefault(pid, []).append(r_dict)
-        if r_dict["shift_type_id"]:
-            shift_type_ids.add(r_dict["shift_type_id"])
+        if shift_type_id:
+            shift_type_ids.add(shift_type_id)
             
-    # 4. Shift Segments
+    # 4. Shift Segments - עם תמיכה בהיסטוריה
     segments_by_shift = {}
     shift_has_standby = {}
     if shift_type_ids:
-        placeholders = ",".join(["%s"] * len(shift_type_ids))
-        cursor.execute(f"""
-            SELECT id, shift_type_id, start_time, end_time, wage_percent, segment_type, order_index
-            FROM shift_time_segments 
-            WHERE shift_type_id IN ({placeholders}) 
-            ORDER BY order_index
-        """, tuple(shift_type_ids))
-        all_segs = cursor.fetchall()
-        for s in all_segs:
-            segments_by_shift.setdefault(s["shift_type_id"], []).append(s)
+        # Use historical segments if available, otherwise current segments
+        segments_by_shift = get_all_segments_for_month(conn, list(shift_type_ids), year, month)
             
         for sid, segs in segments_by_shift.items():
             shift_has_standby[sid] = any(s["segment_type"] == "standby" for s in segs)
@@ -2016,15 +2026,9 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
             key = (row["segment_id"], row["apartment_type_id"], row["marital_status"], row["priority"])
             standby_rates_cache[key] = float(row["amount"]) / 100
 
-    # 7. Min Wage & Shabbat
+    # 7. Min Wage & Shabbat - שימוש בשכר מינימום היסטורי לפי החודש
     shabbat_cache = get_shabbat_times_cache(conn)
-    try:
-        cursor.execute("SELECT hourly_rate FROM minimum_wage_rates ORDER BY effective_from DESC LIMIT 1")
-        mw_row = cursor.fetchone()
-        minimum_wage = (float(mw_row["hourly_rate"]) / 100) if mw_row else 29.12
-    except Exception as e:
-        logger.warning(f"Error fetching min wage: {e}")
-        minimum_wage = DEFAULT_MINIMUM_WAGE
+    minimum_wage = get_minimum_wage_for_month(conn, year, month)
         
     cursor.close()
 
