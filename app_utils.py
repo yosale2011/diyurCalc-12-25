@@ -11,6 +11,11 @@ from utils import overlap_minutes, minutes_to_hours_str, to_gematria, month_rang
 from convertdate import hebrew
 import logging
 
+from history import (
+    get_apartment_type_for_month, get_person_status_for_month,
+    get_all_shift_rates_for_month
+)
+
 logger = logging.getLogger(__name__)
 
 def get_effective_hourly_rate(report, minimum_wage: float) -> float:
@@ -70,6 +75,36 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
     """, (person_id, start_date, end_date)).fetchall()
     
     person_name = reports[0]["person_name"] if reports else ""
+
+    # Override apartment types and marital status with historical data
+    # Build apartment historical cache
+    apartment_ids = {r["apartment_id"] for r in reports if r["apartment_id"]}
+    apartment_type_cache = {}
+    for apt_id in apartment_ids:
+        hist_type = get_apartment_type_for_month(conn, apt_id, year, month)
+        if hist_type is not None:
+            apartment_type_cache[apt_id] = hist_type
+
+    # Historical marital status
+    historical_person = get_person_status_for_month(conn, person_id, year, month)
+    historical_is_married = historical_person.get("is_married")
+
+    # Apply historical overrides to reports
+    processed_reports = []
+    for r in reports:
+        r_dict = dict(r)
+        # Override apartment_type_id
+        apt_id = r_dict.get("apartment_id")
+        if apt_id and apt_id in apartment_type_cache:
+            r_dict["apartment_type_id"] = apartment_type_cache[apt_id]
+        
+        # Override is_married
+        if historical_is_married is not None:
+            r_dict["is_married"] = historical_is_married
+            
+        processed_reports.append(r_dict)
+    
+    reports = processed_reports
 
     # Fetch segments
     shift_ids = {r["shift_type_id"] for r in reports if r["shift_type_id"]}

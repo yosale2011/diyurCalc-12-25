@@ -17,19 +17,27 @@ logger = logging.getLogger(__name__)
 def get_person_status_for_month(conn, person_id: int, year: int, month: int) -> dict:
     """
     Get person status (married, employer, type) for a specific month.
-    First checks history table, falls back to current data in people table.
+    First checks history table using "valid until" logic, falls back to current data.
+    
+    History records store (year, month) as "valid until" - meaning the old value
+    was valid up to but NOT including that month.
 
     Returns:
         dict with keys: is_married, employer_id, employee_type
     """
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     try:
-        # First, check if there's a historical record for this month
+        # Find a historical record where the requested month is covered
+        # Logic: requested (year, month) < historical (year, month)
+        # Order by year/month ASC to get the first (earliest) matching record
         cursor.execute("""
             SELECT is_married, employer_id, employee_type
             FROM person_status_history
-            WHERE person_id = %s AND year = %s AND month = %s
-        """, (person_id, year, month))
+            WHERE person_id = %s
+              AND (year > %s OR (year = %s AND month > %s))
+            ORDER BY year ASC, month ASC
+            LIMIT 1
+        """, (person_id, year, year, month))
 
         history = cursor.fetchone()
 
@@ -41,7 +49,7 @@ def get_person_status_for_month(conn, person_id: int, year: int, month: int) -> 
                 "employee_type": history["employee_type"]
             }
 
-        # No history - use current data from people table
+        # No history covers this month - use current data from people table
         cursor.execute("""
             SELECT is_married, employer_id, type as employee_type
             FROM people
@@ -70,19 +78,27 @@ def get_person_status_for_month(conn, person_id: int, year: int, month: int) -> 
 def get_apartment_type_for_month(conn, apartment_id: int, year: int, month: int) -> Optional[int]:
     """
     Get apartment type ID for a specific month.
-    First checks history table, falls back to current data in apartments table.
+    First checks history table using "valid until" logic, falls back to current data.
+    
+    History records store (year, month) as "valid until" - meaning the old value
+    was valid up to but NOT including that month.
 
     Returns:
         apartment_type_id or None
     """
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     try:
-        # First, check if there's a historical record for this month
+        # Find a historical record where the requested month is covered
+        # Logic: requested (year, month) < historical (year, month)
+        # Order by year/month ASC to get the first (earliest) matching record
         cursor.execute("""
             SELECT apartment_type_id
             FROM apartment_status_history
-            WHERE apartment_id = %s AND year = %s AND month = %s
-        """, (apartment_id, year, month))
+            WHERE apartment_id = %s
+              AND (year > %s OR (year = %s AND month > %s))
+            ORDER BY year ASC, month ASC
+            LIMIT 1
+        """, (apartment_id, year, year, month))
 
         history = cursor.fetchone()
 
@@ -90,7 +106,7 @@ def get_apartment_type_for_month(conn, apartment_id: int, year: int, month: int)
             logger.debug(f"Using historical data for apartment {apartment_id} ({year}/{month})")
             return history["apartment_type_id"]
 
-        # No history - use current data from apartments table
+        # No history covers this month - use current data from apartments table
         cursor.execute("""
             SELECT apartment_type_id
             FROM apartments
@@ -117,7 +133,10 @@ def get_standby_rate_for_month(
 ) -> Optional[int]:
     """
     Get standby rate amount for a specific month.
-    First checks history table, falls back to current data in standby_rates table.
+    First checks history table using "valid until" logic, falls back to current data.
+    
+    History records store (year, month) as "valid until" - meaning the old value
+    was valid up to but NOT including that month.
 
     Args:
         segment_id: The shift segment ID
@@ -131,15 +150,18 @@ def get_standby_rate_for_month(
     """
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     try:
-        # First, check if there's a historical record for this month
+        # Find a historical record where the requested month is covered
+        # Logic: requested (year, month) < historical (year, month)
         cursor.execute("""
             SELECT amount
             FROM standby_rates_history
-            WHERE year = %s AND month = %s
-            AND segment_id = %s
-            AND apartment_type_id = %s
-            AND marital_status = %s
-        """, (year, month, segment_id, apartment_type_id, marital_status))
+            WHERE segment_id = %s
+              AND apartment_type_id = %s
+              AND marital_status = %s
+              AND (year > %s OR (year = %s AND month > %s))
+            ORDER BY year ASC, month ASC
+            LIMIT 1
+        """, (segment_id, apartment_type_id, marital_status, year, year, month))
 
         history = cursor.fetchone()
 
@@ -147,7 +169,7 @@ def get_standby_rate_for_month(
             logger.debug(f"Using historical standby rate for segment {segment_id} ({year}/{month})")
             return history["amount"]
 
-        # No history - use current data from standby_rates table
+        # No history covers this month - use current data from standby_rates table
         cursor.execute("""
             SELECT amount
             FROM standby_rates
@@ -425,19 +447,25 @@ def get_shift_rate_for_month(
 ) -> Optional[dict]:
     """
     Get shift rate for a specific month.
-    First checks history table, falls back to current data in shift_types table.
+    First checks history table using "valid until" logic, falls back to current data.
+    
+    History records store (year, month) as "valid until" - meaning the old value
+    was valid up to but NOT including that month.
 
     Returns:
         dict with keys: rate, is_minimum_wage, or None if not found
     """
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     try:
-        # First, check if there's a historical record for this month
+        # Find a historical record where the requested month is covered
         cursor.execute("""
             SELECT rate, is_minimum_wage
             FROM shift_types_history
-            WHERE shift_type_id = %s AND year = %s AND month = %s
-        """, (shift_type_id, year, month))
+            WHERE shift_type_id = %s
+              AND (year > %s OR (year = %s AND month > %s))
+            ORDER BY year ASC, month ASC
+            LIMIT 1
+        """, (shift_type_id, year, year, month))
 
         history = cursor.fetchone()
 
@@ -448,7 +476,7 @@ def get_shift_rate_for_month(
                 "is_minimum_wage": history["is_minimum_wage"]
             }
 
-        # No history - use current data from shift_types table
+        # No history covers this month - use current data from shift_types table
         cursor.execute("""
             SELECT rate, is_minimum_wage
             FROM shift_types
@@ -540,7 +568,10 @@ def save_all_shift_rates_to_history(conn, year: int, month: int, created_by: int
 def get_all_shift_rates_for_month(conn, year: int, month: int) -> dict:
     """
     Get all shift rates for a specific month as a cache dictionary.
-    First checks history table, falls back to current data.
+    First checks history table using "valid until" logic, falls back to current data.
+    
+    History records store (year, month) as "valid until" - meaning the old value
+    was valid up to but NOT including that month.
 
     Returns:
         dict mapping shift_type_id to {rate, is_minimum_wage}
@@ -548,33 +579,42 @@ def get_all_shift_rates_for_month(conn, year: int, month: int) -> dict:
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     result = {}
     try:
-        # Check for historical rates
-        cursor.execute("""
-            SELECT shift_type_id, rate, is_minimum_wage
-            FROM shift_types_history
-            WHERE year = %s AND month = %s
-        """, (year, month))
-
-        historical = cursor.fetchall()
-
-        if historical:
-            for row in historical:
-                result[row["shift_type_id"]] = {
-                    "rate": row["rate"],
-                    "is_minimum_wage": row["is_minimum_wage"]
-                }
-            logger.debug(f"Using {len(result)} historical shift rates for {year}/{month}")
-        else:
-            # No history - use current rates
+        # Get all shift types first
+        cursor.execute("SELECT id FROM shift_types")
+        all_shift_ids = [row["id"] for row in cursor.fetchall()]
+        
+        # For each shift type, find the appropriate rate
+        for shift_type_id in all_shift_ids:
+            # Check for historical rate using "valid until" logic
             cursor.execute("""
-                SELECT id, rate, is_minimum_wage
-                FROM shift_types
-            """)
-            for row in cursor.fetchall():
-                result[row["id"]] = {
-                    "rate": row["rate"],
-                    "is_minimum_wage": row["is_minimum_wage"]
+                SELECT rate, is_minimum_wage
+                FROM shift_types_history
+                WHERE shift_type_id = %s
+                  AND (year > %s OR (year = %s AND month > %s))
+                ORDER BY year ASC, month ASC
+                LIMIT 1
+            """, (shift_type_id, year, year, month))
+            
+            history = cursor.fetchone()
+            
+            if history:
+                result[shift_type_id] = {
+                    "rate": history["rate"],
+                    "is_minimum_wage": history["is_minimum_wage"]
                 }
+            else:
+                # No history - use current rate
+                cursor.execute("""
+                    SELECT rate, is_minimum_wage
+                    FROM shift_types
+                    WHERE id = %s
+                """, (shift_type_id,))
+                current = cursor.fetchone()
+                if current:
+                    result[shift_type_id] = {
+                        "rate": current["rate"],
+                        "is_minimum_wage": current["is_minimum_wage"]
+                    }
 
         return result
     finally:
@@ -593,7 +633,10 @@ def get_segments_for_shift_month(
 ) -> list:
     """
     Get shift time segments for a specific month.
-    First checks history table, falls back to current data in shift_time_segments table.
+    First checks history table using "valid until" logic, falls back to current data.
+    
+    History records store (year, month) as "valid until" - meaning the old value
+    was valid up to but NOT including that month.
 
     Returns:
         list of dicts with keys: id, shift_type_id, start_time, end_time,
@@ -601,22 +644,35 @@ def get_segments_for_shift_month(
     """
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     try:
-        # First, check if there's historical records for this month
+        # Find historical records where the requested month is covered
+        # We need to find the earliest "valid until" that covers our month
         cursor.execute("""
-            SELECT segment_id as id, shift_type_id, start_time, end_time,
-                   wage_percent, segment_type, order_index
+            SELECT DISTINCT year, month
             FROM shift_time_segments_history
-            WHERE shift_type_id = %s AND year = %s AND month = %s
-            ORDER BY order_index
-        """, (shift_type_id, year, month))
+            WHERE shift_type_id = %s
+              AND (year > %s OR (year = %s AND month > %s))
+            ORDER BY year ASC, month ASC
+            LIMIT 1
+        """, (shift_type_id, year, year, month))
+        
+        valid_until = cursor.fetchone()
+        
+        if valid_until:
+            # Get segments for this valid_until period
+            cursor.execute("""
+                SELECT segment_id as id, shift_type_id, start_time, end_time,
+                       wage_percent, segment_type, order_index
+                FROM shift_time_segments_history
+                WHERE shift_type_id = %s AND year = %s AND month = %s
+                ORDER BY order_index
+            """, (shift_type_id, valid_until["year"], valid_until["month"]))
+            
+            history = cursor.fetchall()
+            if history:
+                logger.debug(f"Using historical segments for shift_type {shift_type_id} ({year}/{month})")
+                return [dict(row) for row in history]
 
-        history = cursor.fetchall()
-
-        if history:
-            logger.debug(f"Using historical segments for shift_type {shift_type_id} ({year}/{month})")
-            return [dict(row) for row in history]
-
-        # No history - use current data from shift_time_segments table
+        # No history covers this month - use current data from shift_time_segments table
         cursor.execute("""
             SELECT id, shift_type_id, start_time, end_time,
                    wage_percent, segment_type, order_index
@@ -633,7 +689,8 @@ def get_segments_for_shift_month(
 def get_all_segments_for_month(conn, shift_type_ids: list, year: int, month: int) -> dict:
     """
     Get all shift time segments for multiple shift types for a specific month.
-    First checks history table, falls back to current data.
+    Uses "valid until" logic: for each shift type, finds historical data that covers
+    the requested month, falls back to current data.
 
     Args:
         shift_type_ids: List of shift type IDs to get segments for
@@ -644,42 +701,15 @@ def get_all_segments_for_month(conn, shift_type_ids: list, year: int, month: int
     if not shift_type_ids:
         return {}
 
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     result = {}
-    try:
-        placeholders = ",".join(["%s"] * len(shift_type_ids))
+    
+    # For each shift type, get segments using "valid until" logic
+    for shift_type_id in shift_type_ids:
+        segments = get_segments_for_shift_month(conn, shift_type_id, year, month)
+        if segments:
+            result[shift_type_id] = segments
 
-        # Check for historical segments first
-        cursor.execute(f"""
-            SELECT segment_id as id, shift_type_id, start_time, end_time,
-                   wage_percent, segment_type, order_index
-            FROM shift_time_segments_history
-            WHERE year = %s AND month = %s AND shift_type_id IN ({placeholders})
-            ORDER BY order_index
-        """, (year, month) + tuple(shift_type_ids))
-
-        historical = cursor.fetchall()
-
-        if historical:
-            logger.debug(f"Using historical segments for {year}/{month}")
-            for row in historical:
-                result.setdefault(row["shift_type_id"], []).append(dict(row))
-        else:
-            # No history - use current segments
-            cursor.execute(f"""
-                SELECT id, shift_type_id, start_time, end_time,
-                       wage_percent, segment_type, order_index
-                FROM shift_time_segments
-                WHERE shift_type_id IN ({placeholders})
-                ORDER BY order_index
-            """, tuple(shift_type_ids))
-
-            for row in cursor.fetchall():
-                result.setdefault(row["shift_type_id"], []).append(dict(row))
-
-        return result
-    finally:
-        cursor.close()
+    return result
 
 
 def save_segment_to_history(
@@ -774,7 +804,7 @@ def get_minimum_wage_for_month(conn, year: int, month: int) -> float:
     Returns:
         hourly rate in shekels, or default value if not found
     """
-    DEFAULT_MINIMUM_WAGE = 32.30  # Current default as of 2024
+    DEFAULT_MINIMUM_WAGE = 34.40  # Current default as of April 2024
 
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     try:

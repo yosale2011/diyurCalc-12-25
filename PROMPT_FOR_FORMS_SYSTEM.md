@@ -255,9 +255,78 @@ async function saveAllStandbyRatesToHistory(year, month) {
 4. **ממשק נעילת חודש** - הוסף ממשק לנעילה/פתיחת חודש
 5. **חסימת עריכה** - בדוק נעילה לפני כל עריכה והצג הודעה מתאימה
 
-## הערות חשובות
+## הערות חשובות - גישת "תקף עד"
+
+> **עדכון חשוב (ינואר 2026)**: הלוגיקה שונתה לגישת "תקף עד" (valid until)
+
+### משמעות עמודות year/month
+
+העמודות `year` ו-`month` בטבלאות ההיסטוריה מציינות **עד מתי הערך הישן היה תקף** (כולל אותו חודש).
+
+**דוגמה:**
+```
+apartment_status_history:
+| apartment_id | year | month | apartment_type_id |
+|--------------|------|-------|-------------------|
+| 5            | 2025 | 12    | 1 (רגילה)         |
+
+המשמעות: דירה 5 הייתה מסוג "רגילה" עד דצמבר 2025 (כולל).
+מינואר 2026 ואילך - משתמשים בערך הנוכחי מטבלת apartments.
+```
+
+### מה לעשות בעת שינוי
+
+כשמשנים נתון במערכת הטפסים:
+
+1. **בקש מהמשתמש** להזין "עד מתי הערך הישן היה תקף" (חודש + שנה)
+2. **שמור להיסטוריה** את הערך **הישן** עם ה-year/month שהמשתמש הזין
+3. **עדכן את הטבלה הראשית** עם הערך **החדש**
+
+```
+┌─────────────────────────────────────────────────────┐
+│  עריכת דירה: גוונים                                 │
+│                                                     │
+│  סוג דירה:  [  טיפולית  ▼]                          │
+│                                                     │
+│  ⚠️ שינית את סוג הדירה מ"רגילה"!                    │
+│                                                     │
+│  הסוג הקודם (רגילה) היה תקף עד:                     │
+│  חודש: [  12  ▼]  שנה: [  2025  ▼]                  │
+│                                                     │
+│  [  שמור  ]                                         │
+└─────────────────────────────────────────────────────┘
+```
+
+### לוגיקת שמירה מעודכנת
+
+```javascript
+async function updateApartment(apartmentId, newData, validUntilYear, validUntilMonth) {
+    const currentApartment = await getApartmentById(apartmentId);
+
+    if (currentApartment.apartment_type_id !== newData.apartment_type_id) {
+        // שמירת הסוג הישן עם "תקף עד"
+        await db.query(`
+            INSERT INTO apartment_status_history
+            (apartment_id, year, month, apartment_type_id)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (apartment_id, year, month)
+            DO UPDATE SET apartment_type_id = EXCLUDED.apartment_type_id
+        `, [
+            apartmentId,
+            validUntilYear,                       // year = תקף עד שנה
+            validUntilMonth,                      // month = תקף עד חודש
+            currentApartment.apartment_type_id   // הסוג הישן!
+        ]);
+    }
+
+    await updateApartmentInDB(apartmentId, newData);
+}
+```
+
+### הערות נוספות
 
 - השמירה להיסטוריה צריכה להתבצע **לפני** השמירה לטבלה הראשית
 - יש להשתמש ב-`ON CONFLICT DO UPDATE` כדי לא ליצור כפילויות
 - בדיקת נעילת חודש צריכה להיות בצד השרת, לא רק בצד הלקוח
-- התאריך הרלוונטי הוא **החודש הנוכחי** (מתי מבצעים את השינוי)
+- **חשוב:** התאריך שהמשתמש מזין הוא **"עד מתי תקף"** - לא "מתי בוצע השינוי"
+

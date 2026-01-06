@@ -211,13 +211,14 @@ def get_standby_rate(conn, segment_id: int, apartment_type_id: int | None, is_ma
     """
     marital_status = "married" if is_married else "single"
 
-    # If year/month provided, try historical rates first
+    # If year/month provided, try historical rates first using "valid until" logic
     if year is not None and month is not None:
         from history import get_standby_rate_for_month
         historical_amount = get_standby_rate_for_month(
             conn, segment_id, apartment_type_id, marital_status, year, month
         )
         if historical_amount is not None:
+            logger.debug(f"Using historical standby rate for seg={segment_id}, type={apartment_type_id}: {historical_amount/100}")
             return float(historical_amount) / 100
 
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
@@ -1541,8 +1542,7 @@ def calculate_person_monthly_totals(
     """
     from utils import month_range_ts, calculate_accruals
     from history import (get_person_status_for_month, get_apartment_type_for_month,
-                         get_all_shift_rates_for_month, get_minimum_wage_for_month,
-                         get_all_segments_for_month)
+                         get_all_shift_rates_for_month, get_minimum_wage_for_month)
     
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     
@@ -1602,7 +1602,10 @@ def calculate_person_monthly_totals(
         # Override apartment_type_id with historical value if available
         apt_id = r_dict.get("apartment_id")
         if apt_id and apt_id in apartment_type_cache:
+            old_val = r_dict.get("apartment_type_id")
             r_dict["apartment_type_id"] = apartment_type_cache[apt_id]
+            if old_val != apartment_type_cache[apt_id]:
+                logger.info(f"Historical override for apt {apt_id}: {old_val} -> {apartment_type_cache[apt_id]} ({year}/{month})")
         # Override shift rate with historical value if available
         shift_type_id = r_dict.get("shift_type_id")
         if shift_type_id and shift_type_id in shift_rates_cache:
@@ -1624,11 +1627,19 @@ def calculate_person_monthly_totals(
 
     # עיבוד דיווחי שעות - רק אם יש דיווחים
     if reports:
-        # שליפת מקטעי משמרות - עם תמיכה בהיסטוריה
+        # שליפת מקטעי משמרות מהטבלה הנוכחית
         shift_ids = list({r["shift_type_id"] for r in reports if r["shift_type_id"]})
-        
-        # Use historical segments if available, otherwise current segments
-        segments_by_shift = get_all_segments_for_month(conn, shift_ids, year, month)
+        segments_by_shift = {}
+        if shift_ids:
+            placeholders = ",".join(["%s"] * len(shift_ids))
+            cursor.execute(f"""
+                SELECT id, shift_type_id, start_time, end_time, wage_percent, segment_type, order_index
+                FROM shift_time_segments
+                WHERE shift_type_id IN ({placeholders})
+                ORDER BY order_index
+            """, tuple(shift_ids))
+            for s in cursor.fetchall():
+                segments_by_shift.setdefault(s["shift_type_id"], []).append(dict(s))
 
         # זיהוי משמרות עם כוננות
         shift_has_standby = {sid: any(s["segment_type"] == "standby" for s in segs)
@@ -1895,8 +1906,7 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
     # Import month_range_ts locally to avoid circular imports
     from utils import month_range_ts
     from history import (get_person_status_for_month, get_apartment_type_for_month,
-                         get_all_shift_rates_for_month, get_minimum_wage_for_month,
-                         get_all_segments_for_month)
+                         get_all_shift_rates_for_month, get_minimum_wage_for_month)
     
     # 1. Fetch Payment Codes
     payment_codes = get_payment_codes(conn)
@@ -1973,12 +1983,20 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
         if shift_type_id:
             shift_type_ids.add(shift_type_id)
             
-    # 4. Shift Segments - עם תמיכה בהיסטוריה
+    # 4. Shift Segments - שליפה מהטבלה הנוכחית
     segments_by_shift = {}
     shift_has_standby = {}
     if shift_type_ids:
-        # Use historical segments if available, otherwise current segments
-        segments_by_shift = get_all_segments_for_month(conn, list(shift_type_ids), year, month)
+        placeholders = ",".join(["%s"] * len(shift_type_ids))
+        cursor.execute(f"""
+            SELECT id, shift_type_id, start_time, end_time, wage_percent, segment_type, order_index
+            FROM shift_time_segments 
+            WHERE shift_type_id IN ({placeholders}) 
+            ORDER BY order_index
+        """, tuple(shift_type_ids))
+        all_segs = cursor.fetchall()
+        for s in all_segs:
+            segments_by_shift.setdefault(s["shift_type_id"], []).append(dict(s))
             
         for sid, segs in segments_by_shift.items():
             shift_has_standby[sid] = any(s["segment_type"] == "standby" for s in segs)
