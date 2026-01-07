@@ -491,13 +491,22 @@ def _build_daily_map(
         r_start, r_end = span_minutes(r["start_time"], r["end_time"])
         r_date = to_local_date(r["date"])
 
+        # משמרת לווי רפואי (148) - לפחות שעה עבודה
+        is_medical_escort = (r["shift_type_id"] == 148)
+        escort_bonus_minutes = 0
+        if is_medical_escort:
+            duration = r_end - r_start
+            if duration < 60:
+                escort_bonus_minutes = 60 - duration
+
         # פיצול משמרות חוצות חצות
         parts = []
         if r_end <= MINUTES_PER_DAY:
-            parts.append((r_date, r_start, r_end))
+            parts.append((r_date, r_start, r_end, escort_bonus_minutes))
         else:
-            parts.append((r_date, r_start, MINUTES_PER_DAY))
-            parts.append((r_date + timedelta(days=1), 0, r_end - MINUTES_PER_DAY))
+            # בפיצול חצות, הבונוס בדרך כלל שייך ליום ההתחלה, אבל נצמיד אותו לחלק הראשון
+            parts.append((r_date, r_start, MINUTES_PER_DAY, escort_bonus_minutes))
+            parts.append((r_date + timedelta(days=1), 0, r_end - MINUTES_PER_DAY, 0))
 
         seg_list = segments_by_shift.get(r["shift_type_id"], [])
         if not seg_list:
@@ -650,7 +659,7 @@ def _build_daily_map(
                 ))
             continue  # דלג על העיבוד הרגיל עבור משמרת זו
 
-        for p_date, p_start, p_end in parts:
+        for p_date, p_start, p_end, p_escort_bonus in parts:
             # פיצול מקטעים שחוצים את גבול 08:00
             CUTOFF = WORK_DAY_START_MINUTES  # 480
             sub_parts = []
@@ -681,7 +690,17 @@ def _build_daily_map(
                     continue
 
                 day_key = display_date.strftime("%d/%m/%Y")
-                entry = daily_map.setdefault(day_key, {"segments": [], "date": display_date})
+                if day_key not in daily_map:
+                    daily_map[day_key] = {
+                        "segments": [], 
+                        "date": display_date,
+                        "escort_bonus_minutes": 0
+                    }
+                entry = daily_map[day_key]
+                
+                # Add bonus only once per part
+                if s_start == p_start:  # Only add to the first sub-part to avoid double counting
+                    entry["escort_bonus_minutes"] += p_escort_bonus
 
                 is_second_day = (p_date > r_date)
 
@@ -1150,6 +1169,7 @@ def _process_daily_map(
     work_days_set = set()
     vacation_days_set = set()
 
+
     # Track carryover minutes from previous day's chain ending at 08:00
     prev_day_carryover_minutes = 0
     prev_day_ended_at_midnight = False
@@ -1157,6 +1177,9 @@ def _process_daily_map(
 
     for day_key, entry in sorted(daily_map.items()):
         day_date = entry["date"]
+
+        if entry.get("escort_bonus_minutes", 0) > 0:
+            totals["calc100"] += entry["escort_bonus_minutes"]
 
         # בדיקה אם הימים רציפים - אם לא, לאפס carryover
         if prev_day_date is not None:

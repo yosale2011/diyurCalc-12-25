@@ -89,6 +89,9 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
     historical_person = get_person_status_for_month(conn, person_id, year, month)
     historical_is_married = historical_person.get("is_married")
 
+    # Build shift rates historical cache
+    shift_rates_cache = get_all_shift_rates_for_month(conn, year, month)
+
     # Apply historical overrides to reports
     processed_reports = []
     for r in reports:
@@ -101,6 +104,13 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         # Override is_married
         if historical_is_married is not None:
             r_dict["is_married"] = historical_is_married
+            
+        # Override shift rate with historical value if available
+        shift_type_id = r_dict.get("shift_type_id")
+        if shift_type_id and shift_type_id in shift_rates_cache:
+            rate_info = shift_rates_cache[shift_type_id]
+            r_dict["shift_rate"] = rate_info.get("rate")
+            r_dict["shift_is_minimum_wage"] = rate_info.get("is_minimum_wage")
             
         processed_reports.append(r_dict)
     
@@ -148,13 +158,22 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         rep_start_orig, rep_end_orig = span_minutes(r["start_time"], r["end_time"])
         r_date = to_local_date(r["date"])
         
+        # משמרת לווי רפואי (148) - לפחות שעה עבודה
+        is_medical_escort = (r["shift_type_id"] == 148)
+        escort_bonus_minutes = 0
+        if is_medical_escort:
+            duration = rep_end_orig - rep_start_orig
+            if duration < 60:
+                escort_bonus_minutes = 60 - duration
+        
         parts = []
         if rep_end_orig <= MINUTES_PER_DAY:
-            parts.append((r_date, rep_start_orig, rep_end_orig))
+            parts.append((r_date, rep_start_orig, rep_end_orig, escort_bonus_minutes))
         else:
-            parts.append((r_date, rep_start_orig, MINUTES_PER_DAY))
+            # בפיצול חצות, הבונוס בדרך כלל שייך ליום ההתחלה, אבל נצמיד אותו לחלק הראשון
+            parts.append((r_date, rep_start_orig, MINUTES_PER_DAY, escort_bonus_minutes))
             next_day = r_date + timedelta(days=1)
-            parts.append((next_day, 0, rep_end_orig - MINUTES_PER_DAY))
+            parts.append((next_day, 0, rep_end_orig - MINUTES_PER_DAY, 0))
             
         seg_list = segments_by_shift.get(r["shift_type_id"], [])
         if not seg_list:
@@ -242,7 +261,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             CUTOFF = 480  # 08:00
             display_date = r_date  # יום הדיווח
             day_key = display_date.strftime("%d/%m/%Y")
-            entry = daily_map.setdefault(day_key, {"buckets": {}, "shifts": set(), "segments": [], "is_fixed_segments": False})
+            entry = daily_map.setdefault(day_key, {"buckets": {}, "shifts": set(), "segments": [], "is_fixed_segments": False, "escort_bonus_minutes": 0})
             entry["is_fixed_segments"] = True  # סימון שזו משמרת קבועה
             if r["shift_name"]:
                 entry["shifts"].add(r["shift_name"])
@@ -291,7 +310,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
 
             continue  # דלג על העיבוד הרגיל עבור משמרת זו
 
-        for p_date, p_start, p_end in parts:
+        for p_date, p_start, p_end, p_escort_bonus in parts:
             # Split segments crossing 08:00 cutoff
             CUTOFF = 480  # 08:00
             sub_parts = []
@@ -322,7 +341,20 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     continue
 
                 day_key = display_date.strftime("%d/%m/%Y")
-                entry = daily_map.setdefault(day_key, {"buckets": {}, "shifts": set(), "segments": [], "is_fixed_segments": False})
+                if day_key not in daily_map:
+                    daily_map[day_key] = {
+                        "buckets": {}, 
+                        "shifts": set(), 
+                        "segments": [], 
+                        "is_fixed_segments": False,
+                        "escort_bonus_minutes": 0
+                    }
+                entry = daily_map[day_key]
+                
+                # Add bonus only once per part
+                if s_start == p_start:
+                    entry["escort_bonus_minutes"] += p_escort_bonus
+                    
                 if r["shift_name"]:
                     entry["shifts"].add(r["shift_name"])
                     
@@ -584,6 +616,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         if h_month == 12 and hebrew.leap(h_year): month_name = "אדר א'"
         elif h_month == 13: month_name = "אדר ב'"
         hebrew_date_str = f"{to_gematria(h_day)} ב{month_name} {to_gematria(h_year)}"
+        
         
         # Shabbat / Holiday name
         special_day_name = ""
@@ -884,6 +917,12 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     })
 
             total_minutes = sum(w[1]-w[0] for w in work_segments) + sum(v[1]-v[0] for v in vacation_segments) + sum(s[1]-s[0] for s in sick_segments)
+
+            # Add escort bonus minutes to calc100 and d_payment
+            bonus_mins = entry.get("escort_bonus_minutes", 0)
+            if bonus_mins > 0:
+                d_calc100 += bonus_mins
+                d_payment += (bonus_mins / 60) * minimum_wage
 
             daily_segments.append({
                 "day": day,
@@ -1219,6 +1258,12 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             return minutes
 
         chains.sort(key=chain_sort_key)
+
+        # Add escort bonus minutes to calc100 and d_payment
+        bonus_mins = entry.get("escort_bonus_minutes", 0)
+        if bonus_mins > 0:
+            d_calc100 += bonus_mins
+            d_payment += (bonus_mins / 60) * minimum_wage
 
         daily_segments.append({
             "day": day,
