@@ -17,7 +17,8 @@
       "Bash(cd:*)",
       "Bash(del \"f:\\\\DiyurClock\\\\105\\\\diyur003\\\\check_shift.py\")",
       "Bash(findstr:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(git -C \"f:\\\\DiyurClock\\\\104\\\\diyur003\" diff --stat)"
     ],
     "deny": [],
     "ask": []

@@ -1590,7 +1590,8 @@ def calculate_person_monthly_totals(
                a.apartment_type_id,
                p.is_married,
                st.rate as shift_rate,
-               st.is_minimum_wage as shift_is_minimum_wage
+               st.is_minimum_wage as shift_is_minimum_wage,
+               st.wage_percentage as shift_wage_percentage
         FROM time_reports tr
         LEFT JOIN shift_types st ON st.id = tr.shift_type_id
         LEFT JOIN apartments a ON tr.apartment_id = a.id
@@ -1622,19 +1623,30 @@ def calculate_person_monthly_totals(
         # Override is_married with historical value if available
         if historical_is_married is not None:
             r_dict["is_married"] = historical_is_married
-        # Override apartment_type_id with historical value if available
-        apt_id = r_dict.get("apartment_id")
-        if apt_id and apt_id in apartment_type_cache:
-            old_val = r_dict.get("apartment_type_id")
-            r_dict["apartment_type_id"] = apartment_type_cache[apt_id]
-            if old_val != apartment_type_cache[apt_id]:
-                logger.info(f"Historical override for apt {apt_id}: {old_val} -> {apartment_type_cache[apt_id]} ({year}/{month})")
+        # Override apartment_type_id for rate calculation
+        # Priority: rate_apartment_type_id (if set) > historical > current
+        rate_apt_type = r_dict.get("rate_apartment_type_id")
+        if rate_apt_type:
+            # Use the explicit rate_apartment_type_id from the report
+            r_dict["apartment_type_id"] = rate_apt_type
+        else:
+            # Fall back to historical apartment type
+            apt_id = r_dict.get("apartment_id")
+            if apt_id and apt_id in apartment_type_cache:
+                old_val = r_dict.get("apartment_type_id")
+                r_dict["apartment_type_id"] = apartment_type_cache[apt_id]
+                if old_val != apartment_type_cache[apt_id]:
+                    logger.info(f"Historical override for apt {apt_id}: {old_val} -> {apartment_type_cache[apt_id]} ({year}/{month})")
         # Override shift rate with historical value if available
         shift_type_id = r_dict.get("shift_type_id")
         if shift_type_id and shift_type_id in shift_rates_cache:
             rate_info = shift_rates_cache[shift_type_id]
             r_dict["shift_rate"] = rate_info.get("rate")
             r_dict["shift_is_minimum_wage"] = rate_info.get("is_minimum_wage")
+            r_dict["shift_wage_percentage"] = rate_info.get("wage_percentage")
+            logger.info(f"DEBUG OVERRIDE: shift_type_id={shift_type_id}, rate_info={rate_info}")
+        else:
+            logger.info(f"DEBUG NO-OVERRIDE: shift_type_id={shift_type_id}, shift_wage_percentage from DB={r_dict.get('shift_wage_percentage')}")
         reports.append(r_dict)
 
     # אתחול סיכומים - תמיד, גם אם אין דיווחי שעות
@@ -1704,10 +1716,10 @@ def calculate_person_monthly_totals(
         variable_rate_by_shift = {}
         for r in reports:
             shift_rate = r.get("shift_rate")
-            is_minimum_wage = r.get("shift_is_minimum_wage", True)
-            if shift_rate and not is_minimum_wage:
+            shift_type_id = r.get("shift_type_id")
+            if shift_rate:
                 # shift_rate stored in agorot, convert to shekels
-                variable_rate_by_shift[r.get("shift_type_id")] = float(shift_rate) / 100
+                variable_rate_by_shift[shift_type_id] = float(shift_rate) / 100
 
         # נחשב את דקות העבודה מדיווחים עם תעריף משתנה ואת התשלום הנוסף
         variable_rate_minutes = 0
@@ -1715,14 +1727,15 @@ def calculate_person_monthly_totals(
         for day_key, entry in daily_map.items():
             for seg in entry.get("segments", []):
                 s_start, s_end, s_type, shift_id, seg_id, apt_type, is_married = seg
-                if s_type == "work" and shift_id in variable_rate_by_shift:
-                    duration = s_end - s_start
-                    variable_rate_minutes += duration
-                    # חישוב התשלום הנוסף (הפרש בין התעריף לשכר מינימום)
-                    actual_rate = variable_rate_by_shift[shift_id]
-                    rate_diff = actual_rate - minimum_wage
-                    if rate_diff > 0:
-                        variable_rate_extra_payment += (duration / 60) * rate_diff
+                duration = s_end - s_start
+                if s_type == "work":
+                    if shift_id in variable_rate_by_shift:
+                        variable_rate_minutes += duration
+                        # חישוב התשלום הנוסף (הפרש בין התעריף לשכר מינימום)
+                        actual_rate = variable_rate_by_shift[shift_id]
+                        rate_diff = actual_rate - minimum_wage
+                        if rate_diff > 0:
+                            variable_rate_extra_payment += (duration / 60) * rate_diff
 
         monthly_totals["calc_variable"] = variable_rate_minutes
         monthly_totals["variable_rate_extra_payment"] = variable_rate_extra_payment
@@ -1850,16 +1863,14 @@ def _calculate_totals_from_data(
             monthly_totals[key] = totals[key]
 
         # חישוב שעות בתעריף משתנה
-        # נחשב את כל הדקות של עבודה מדיווחים עם תעריף שונה משכר מינימום
-        # נשתמש ב-daily_map כדי לחשב רק את דקות העבודה (לא כוננות/חופשה)
         # נבנה מפה של shift_id -> תעריף משתנה (בש"ח)
         variable_rate_by_shift = {}
         for r in reports:
             shift_rate = r.get("shift_rate")
-            is_minimum_wage = r.get("shift_is_minimum_wage", True)
-            if shift_rate and not is_minimum_wage:
+            shift_type_id = r.get("shift_type_id")
+            if shift_rate:
                 # shift_rate stored in agorot, convert to shekels
-                variable_rate_by_shift[r.get("shift_type_id")] = float(shift_rate) / 100
+                variable_rate_by_shift[shift_type_id] = float(shift_rate) / 100
 
         # נחשב את דקות העבודה מדיווחים עם תעריף משתנה ואת התשלום הנוסף
         variable_rate_minutes = 0
@@ -1867,16 +1878,15 @@ def _calculate_totals_from_data(
         for day_key, entry in daily_map.items():
             for seg in entry.get("segments", []):
                 s_start, s_end, s_type, shift_id, seg_id, apt_type, is_married = seg
-                if s_type == "work" and shift_id in variable_rate_by_shift:
-                    # זה סגמנט עבודה עם תעריף משתנה
-                    duration = s_end - s_start
-                    variable_rate_minutes += duration
-                    # חישוב התשלום הנוסף (הפרש בין התעריף לשכר מינימום)
-                    actual_rate = variable_rate_by_shift[shift_id]
-                    rate_diff = actual_rate - minimum_wage
-                    if rate_diff > 0:
-                        # הוספת ההפרש (לפי 100% - כי ה-overtime כבר מחושב בחישוב הרגיל)
-                        variable_rate_extra_payment += (duration / 60) * rate_diff
+                duration = s_end - s_start
+                if s_type == "work":
+                    if shift_id in variable_rate_by_shift:
+                        variable_rate_minutes += duration
+                        # חישוב התשלום הנוסף (הפרש בין התעריף לשכר מינימום)
+                        actual_rate = variable_rate_by_shift[shift_id]
+                        rate_diff = actual_rate - minimum_wage
+                        if rate_diff > 0:
+                            variable_rate_extra_payment += (duration / 60) * rate_diff
 
         monthly_totals["calc_variable"] = variable_rate_minutes
         monthly_totals["variable_rate_extra_payment"] = variable_rate_extra_payment
@@ -1945,6 +1955,7 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
         SELECT tr.*, st.name as shift_name,
                st.rate AS shift_rate,
                st.is_minimum_wage AS shift_is_minimum_wage,
+               st.wage_percentage AS shift_wage_percentage,
                a.apartment_type_id,
                p.is_married
         FROM time_reports tr
@@ -1992,8 +2003,14 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
             if hist_married is not None:
                 r_dict["is_married"] = hist_married
 
-        # Override apartment_type_id with historical value if available
-        if apt_id and apt_id in apartment_type_cache:
+        # Override apartment_type_id for rate calculation
+        # Priority: rate_apartment_type_id (if set) > historical > current
+        rate_apt_type = r_dict.get("rate_apartment_type_id")
+        if rate_apt_type:
+            # Use the explicit rate_apartment_type_id from the report
+            r_dict["apartment_type_id"] = rate_apt_type
+        elif apt_id and apt_id in apartment_type_cache:
+            # Fall back to historical apartment type
             r_dict["apartment_type_id"] = apartment_type_cache[apt_id]
 
         # Override shift rate with historical value if available
@@ -2001,6 +2018,7 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
             rate_info = shift_rates_cache[shift_type_id]
             r_dict["shift_rate"] = rate_info.get("rate")
             r_dict["shift_is_minimum_wage"] = rate_info.get("is_minimum_wage")
+            r_dict["shift_wage_percentage"] = rate_info.get("wage_percentage")
 
         reports_by_person.setdefault(pid, []).append(r_dict)
         if shift_type_id:

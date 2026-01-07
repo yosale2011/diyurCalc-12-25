@@ -21,24 +21,23 @@ logger = logging.getLogger(__name__)
 def get_effective_hourly_rate(report, minimum_wage: float) -> float:
     """
     Get the effective hourly rate for a shift.
-    If the shift has a custom rate defined (is_minimum_wage=False and rate is set),
-    use that rate. Otherwise, use the minimum wage.
-    
+    If the shift has a custom rate defined, use that rate.
+    Otherwise, use the minimum wage.
+
     Args:
         report: The report dict containing shift_rate and shift_is_minimum_wage
         minimum_wage: The default minimum wage rate
-        
+
     Returns:
         The effective hourly rate to use for payment calculation
     """
     shift_rate = report.get('shift_rate')
-    is_minimum_wage = report.get('shift_is_minimum_wage', True)
-    
-    # If shift has a custom rate and is NOT using minimum wage
-    if shift_rate and not is_minimum_wage:
+
+    # If shift has a custom rate, use it (regardless of is_minimum_wage flag)
+    if shift_rate:
         # shift_rate is stored in agorot (cents), convert to shekels
         return float(shift_rate) / 100
-    
+
     return minimum_wage
 
 
@@ -96,10 +95,17 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
     processed_reports = []
     for r in reports:
         r_dict = dict(r)
-        # Override apartment_type_id
-        apt_id = r_dict.get("apartment_id")
-        if apt_id and apt_id in apartment_type_cache:
-            r_dict["apartment_type_id"] = apartment_type_cache[apt_id]
+        # Override apartment_type_id for rate calculation
+        # Priority: rate_apartment_type_id (if set) > historical > current
+        rate_apt_type = r_dict.get("rate_apartment_type_id")
+        if rate_apt_type:
+            # Use the explicit rate_apartment_type_id from the report
+            r_dict["apartment_type_id"] = rate_apt_type
+        else:
+            # Fall back to historical apartment type
+            apt_id = r_dict.get("apartment_id")
+            if apt_id and apt_id in apartment_type_cache:
+                r_dict["apartment_type_id"] = apartment_type_cache[apt_id]
         
         # Override is_married
         if historical_is_married is not None:

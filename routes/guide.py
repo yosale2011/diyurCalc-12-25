@@ -17,11 +17,11 @@ from database import get_conn
 from logic import (
     DEFAULT_MINIMUM_WAGE,
     get_shabbat_times_cache,
-    get_minimum_wage,
     get_payment_codes,
     get_available_months_for_person,
     calculate_person_monthly_totals,
 )
+from history import get_minimum_wage_for_month
 from app_utils import get_daily_segments_data
 from utils import human_date, format_currency, month_range_ts
 import psycopg2.extras
@@ -52,10 +52,10 @@ def simple_summary_view(
             now = datetime.now(config.LOCAL_TZ)
             year, month = now.year, now.month
 
-        # Minimum Wage (cached)
+        # Minimum Wage (historical - for the selected month)
         wage_start = time.time()
-        minimum_wage = get_minimum_wage(conn.conn)
-        logger.info(f"get_minimum_wage took: {time.time() - wage_start:.4f}s")
+        minimum_wage = get_minimum_wage_for_month(conn.conn, year, month)
+        logger.info(f"get_minimum_wage_for_month took: {time.time() - wage_start:.4f}s, value={minimum_wage} for {year}/{month}")
 
         shabbat_start = time.time()
         shabbat_cache = get_shabbat_times_cache(conn.conn)
@@ -155,10 +155,7 @@ def guide_view(
         conn_time = time.time() - conn_start
         logger.info(f"Database connection took: {conn_time:.4f}s")
 
-        # שליפת שכר מינימום מה-DB (cached)
-        wage_start = time.time()
-        MINIMUM_WAGE = get_minimum_wage(conn.conn)
-        logger.info(f"get_minimum_wage took: {time.time() - wage_start:.4f}s")
+        # שכר מינימום יישלף בהמשך לפי החודש הנבחר
 
         person = conn.execute(
             """
@@ -195,6 +192,8 @@ def guide_view(
 
         if not months:
             selected_year, selected_month = year or datetime.now().year, month or datetime.now().month
+            # שליפת שכר מינימום לפי החודש הנבחר
+            MINIMUM_WAGE = get_minimum_wage_for_month(conn.conn, selected_year, selected_month)
             month_reports = []
             shift_segments = []
             daily_segments = []
@@ -227,6 +226,11 @@ def guide_view(
                 selected_year, selected_month = months[-1]
             else:
                 selected_year, selected_month = year, month
+
+            # שליפת שכר מינימום לפי החודש הנבחר
+            wage_start = time.time()
+            MINIMUM_WAGE = get_minimum_wage_for_month(conn.conn, selected_year, selected_month)
+            logger.info(f"get_minimum_wage_for_month took: {time.time() - wage_start:.4f}s, value={MINIMUM_WAGE} for {selected_year}/{selected_month}")
 
             # Get monthly data
             shabbat_start = time.time()
