@@ -146,6 +146,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
     # This allows using custom rates for special shifts (like cleaning)
     shift_rates = {}
     shift_names_map = {}  # Map shift_id -> shift_name
+    shabbat_shifts = set()  # Track which shifts are Shabbat/holiday shifts
     for r in reports:
         shift_id = r.get("shift_type_id")
         if shift_id:
@@ -153,6 +154,17 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 shift_rates[shift_id] = get_effective_hourly_rate(r, minimum_wage)
             if shift_id not in shift_names_map:
                 shift_names_map[shift_id] = r.get("shift_name", "")
+            if r.get("for_shabbat_holiday"):
+                shabbat_shifts.add(shift_id)
+
+    # Find standby segment_id for each Shabbat shift (for rate priority)
+    shabbat_standby_seg_ids = {}  # shift_type_id -> standby segment_id
+    for shift_id in shabbat_shifts:
+        if shift_id in segments_by_shift:
+            for seg in segments_by_shift[shift_id]:
+                if seg.get("segment_type") == "standby":
+                    shabbat_standby_seg_ids[shift_id] = seg.get("id")
+                    break
         
     daily_map = {}
     
@@ -267,8 +279,9 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             CUTOFF = 480  # 08:00
             display_date = r_date  # יום הדיווח
             day_key = display_date.strftime("%d/%m/%Y")
-            entry = daily_map.setdefault(day_key, {"buckets": {}, "shifts": set(), "segments": [], "is_fixed_segments": False, "escort_bonus_minutes": 0})
+            entry = daily_map.setdefault(day_key, {"buckets": {}, "shifts": set(), "segments": [], "is_fixed_segments": False, "escort_bonus_minutes": 0, "day_shift_types": set()})
             entry["is_fixed_segments"] = True  # סימון שזו משמרת קבועה
+            entry["day_shift_types"].add(r["shift_type_id"])  # Track shift types for Shabbat detection
             if r["shift_name"]:
                 entry["shifts"].add(r["shift_name"])
 
@@ -349,18 +362,20 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 day_key = display_date.strftime("%d/%m/%Y")
                 if day_key not in daily_map:
                     daily_map[day_key] = {
-                        "buckets": {}, 
-                        "shifts": set(), 
-                        "segments": [], 
+                        "buckets": {},
+                        "shifts": set(),
+                        "segments": [],
                         "is_fixed_segments": False,
-                        "escort_bonus_minutes": 0
+                        "escort_bonus_minutes": 0,
+                        "day_shift_types": set()
                     }
                 entry = daily_map[day_key]
-                
+                entry["day_shift_types"].add(r["shift_type_id"])  # Track shift types for Shabbat detection
+
                 # Add bonus only once per part
                 if s_start == p_start:
                     entry["escort_bonus_minutes"] += p_escort_bonus
-                    
+
                 if r["shift_name"]:
                     entry["shifts"].add(r["shift_name"])
                     
@@ -665,7 +680,8 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             s_start, s_end, s_type, label, sid, seg_id, apt_type, married, apt_name, actual_date = seg_entry
 
             if s_type == "standby":
-                standby_segments.append((s_start, s_end, seg_id, apt_type, married, actual_date))
+                # Include shift_type_id (sid) for priority selection when merging
+                standby_segments.append((s_start, s_end, seg_id, apt_type, married, actual_date, sid))
             elif s_type == "vacation":
                 vacation_segments.append((s_start, s_end, actual_date))
             elif s_type == "sick":
@@ -688,7 +704,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 seen.add(k)
         work_segments = deduped  # Each is (start, end, label, sid, apt_name, actual_date)
         
-        # Dedup standby
+        # Dedup standby - now includes shift_type_id (7 elements)
         deduped_sb = []
         seen_sb = set()
         for sb in standby_segments:
@@ -697,25 +713,43 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 deduped_sb.append(sb)
                 seen_sb.add(k)
         standby_segments = deduped_sb
-        
+
         # Merge continuous standby segments BEFORE cancellation check
         # This ensures we check the FULL standby period, not individual fragments
+        # When merging, prefer Shabbat/holiday shift's seg_id for rate calculation
         standby_segments.sort(key=lambda x: x[0])
         merged_standbys = []
+
+        # Check if this day has any Shabbat shift - if so, use Shabbat standby rate for all standbys
+        day_shift_types = entry.get("day_shift_types", set())
+        day_has_shabbat = bool(day_shift_types & shabbat_shifts)
+        shabbat_standby_seg_id = None
+        if day_has_shabbat:
+            # Find the standby seg_id from a Shabbat shift
+            for st_id in (day_shift_types & shabbat_shifts):
+                if st_id in shabbat_standby_seg_ids:
+                    shabbat_standby_seg_id = shabbat_standby_seg_ids[st_id]
+                    break
+
         for sb in standby_segments:
-            sb_start, sb_end, seg_id, apt_type, married, actual_date = sb
+            sb_start, sb_end, seg_id, apt_type, married, actual_date, shift_type_id = sb
+
+            # If day has Shabbat and we found a Shabbat standby seg_id, use it
+            if shabbat_standby_seg_id is not None:
+                seg_id = shabbat_standby_seg_id
+
             if merged_standbys and sb_start <= merged_standbys[-1][1]:  # Overlapping or adjacent
-                # Extend the previous merged standby
+                # Extend the previous merged standby (seg_id already corrected above)
                 prev = merged_standbys[-1]
-                merged_standbys[-1] = (prev[0], max(prev[1], sb_end), prev[2], prev[3], prev[4], prev[5])
+                merged_standbys[-1] = (prev[0], max(prev[1], sb_end), seg_id, apt_type, married, actual_date, shift_type_id)
             else:
-                merged_standbys.append(sb)
+                merged_standbys.append((sb_start, sb_end, seg_id, apt_type, married, actual_date, shift_type_id))
 
         # Standby Trim Logic - subtract work time from standby instead of cancelling
         cancelled_standbys = []
         trimmed_standbys = []
         for sb in merged_standbys:
-            sb_start, sb_end, seg_id, apt_type, married, actual_date = sb
+            sb_start, sb_end, seg_id, apt_type, married, actual_date, shift_type_id = sb
             duration = sb_end - sb_start
             if duration <= 0: continue
 
@@ -756,10 +790,10 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                             new_parts.append((r_start, r_end))
                     remaining_parts = new_parts
 
-                # Add trimmed parts
+                # Add trimmed parts (keep shift_type_id)
                 for r_start, r_end in remaining_parts:
                     if r_end > r_start:
-                        trimmed_standbys.append((r_start, r_end, seg_id, apt_type, married, actual_date))
+                        trimmed_standbys.append((r_start, r_end, seg_id, apt_type, married, actual_date, shift_type_id))
 
         standby_segments = trimmed_standbys
         
@@ -893,13 +927,13 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             # עיבוד כוננויות רק למשמרות תגבור (לא לחופשה/מחלה)
             is_tagbur = any("תגבור" in sn for sn in shift_names)
             if is_tagbur and standby_segments:
-                for sb_start, sb_end, seg_id, apt_type, married, actual_date in standby_segments:
+                for sb_start, sb_end, seg_id, apt_type, married, actual_date, _shift_type_id in standby_segments:
                     duration = sb_end - sb_start
                     if duration <= 0:
                         continue
 
-                    # חישוב תשלום כוננות
-                    standby_rate = get_standby_rate(conn, seg_id or 0, apt_type, bool(married)) if seg_id else DEFAULT_STANDBY_RATE
+                    # חישוב תשלום כוננות (עם תמיכה בתעריפים היסטוריים)
+                    standby_rate = get_standby_rate(conn, seg_id or 0, apt_type, bool(married), year, month) if seg_id else DEFAULT_STANDBY_RATE
                     d_standby_pay += standby_rate
 
                     start_str = f"{sb_start // 60 % 24:02d}:{sb_start % 60:02d}"
@@ -952,7 +986,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         all_events = []
         for s, e, l, sid, apt_name, actual_date in work_segments:
             all_events.append({"start": s, "end": e, "type": "work", "label": l, "shift_id": sid, "apartment_name": apt_name or "", "actual_date": actual_date or day_date})
-        for s, e, seg_id, apt, married, actual_date in standby_segments:
+        for s, e, seg_id, apt, married, actual_date, _shift_type_id in standby_segments:
             all_events.append({"start": s, "end": e, "type": "standby", "label": "כוננות", "seg_id": seg_id, "apt": apt, "married": married, "actual_date": actual_date or day_date})
         for s, e, actual_date in vacation_segments:
             all_events.append({"start": s, "end": e, "type": "vacation", "label": "חופשה", "actual_date": actual_date or day_date})
@@ -1182,7 +1216,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 if etype == "standby":
                     is_cont = (last_etype == "standby" and last_end == start)
                     if not is_cont:
-                        rate = get_standby_rate(conn, event.get("seg_id") or 0, event.get("apt"), bool(event.get("married")))
+                        rate = get_standby_rate(conn, event.get("seg_id") or 0, event.get("apt"), bool(event.get("married")), year, month)
                         d_standby_pay += rate
 
                     chains.append({
