@@ -162,3 +162,26 @@ def get_current_db_name() -> str:
     if is_demo_mode():
         return "פיתוח"
     return "עבודה"
+
+
+def close_all_pools():
+    """Close all database connection pools. Used for graceful shutdown."""
+    global _prod_pool, _demo_pool
+    
+    if _prod_pool:
+        try:
+            _prod_pool.closeall()
+            logger.info("Production database pool closed")
+        except Exception as e:
+            logger.error(f"Error closing production pool: {e}")
+        finally:
+            _prod_pool = None
+    
+    if _demo_pool:
+        try:
+            _demo_pool.closeall()
+            logger.info("Demo database pool closed")
+        except Exception as e:
+            logger.error(f"Error closing demo pool: {e}")
+        finally:
+            _demo_pool = None

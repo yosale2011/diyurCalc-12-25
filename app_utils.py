@@ -344,7 +344,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 # דיווח ששעת הסיום שלו לפני 08:00 שייך ליום העבודה הקודם
                 # אבל רק אם זה המשך של משמרת (לא דיווח עצמאי שמתחיל בחצות)
                 # דיווח עצמאי = הדיווח המקורי התחיל בחצות (00:00) ביום הנוכחי
-                is_standalone_midnight_shift = (s_start == 0 and p_date == r_date and rep_start_orig == 0)
+                is_standalone_midnight_shift = (s_start < CUTOFF and p_date == r_date and rep_start_orig < CUTOFF)
                 if s_end <= CUTOFF and not is_standalone_midnight_shift:
                     # Belongs to previous day's workday (continuation of shift)
                     display_date = p_date - timedelta(days=1)
@@ -1042,11 +1042,35 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             c_200 = result["calc200"]
             seg_detail = result.get("segments_detail", [])
 
-            # Get effective rate from first segment's shift_id (all segments in chain should have same rate)
+            # Calculate payment by iterating through segments and applying correct rate per segment
+            # Each segment may have a different rate (e.g., cleaning 50, regular 34.40)
+            c_pay = 0
+            for seg_start, seg_end, seg_label, is_shabbat in seg_detail:
+                # Parse multiplier from label
+                if "200%" in seg_label:
+                    multiplier = 2.0
+                elif "175%" in seg_label:
+                    multiplier = 1.75
+                elif "150%" in seg_label:
+                    multiplier = 1.5
+                elif "125%" in seg_label:
+                    multiplier = 1.25
+                else:
+                    multiplier = 1.0
+
+                # Calculate overlap with original segments to get correct rate
+                for s, e, l, sid, apt, adate in segments:
+                    overlap_start = max(seg_start, s)
+                    overlap_end = min(seg_end, e)
+                    if overlap_start < overlap_end:
+                        overlap_duration = overlap_end - overlap_start
+                        rate = shift_rates.get(sid, minimum_wage)
+                        c_pay += (overlap_duration / 60) * multiplier * rate
+
+            # Get effective rate for display (weighted average or first segment)
             first_shift_id = segments[0][3] if segments else None
             effective_rate = shift_rates.get(first_shift_id, minimum_wage)
-            
-            c_pay = (c_100/60*1.0 + c_125/60*1.25 + c_150/60*1.5 + c_175/60*1.75 + c_200/60*2.0) * effective_rate
+
             return c_pay, c_100, c_125, c_150, c_175, c_200, seg_detail, effective_rate
 
         def close_chain_and_record(segments, break_reason="", minutes_offset=0):
@@ -1062,68 +1086,118 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             chain_duration = sum(e - s for s, e, l, sid, apt, adate in segments)
             chain_total_minutes = minutes_offset + chain_duration
 
-            # Get apartment names from segments - segments is (start, end, label, sid, apt_name, actual_date)
-            chain_apartments = set()
-            chain_shift_names = set()
-            for s, e, l, sid, apt, adate in segments:
-                if apt:
-                    chain_apartments.add(apt)
-                if sid:
-                    shift_name = shift_names_map.get(sid, "")
-                    if shift_name:
-                        chain_shift_names.add(shift_name)
-            apt_name = ", ".join(sorted(chain_apartments)) if chain_apartments else ""
-            shift_name_str = ", ".join(sorted(chain_shift_names)) if chain_shift_names else ""
+            # Create a separate chain row for each rate segment, split by different rates
+            # First, build a list of sub-segments split by both percentage AND rate
+            display_rows = []
 
-            # Create a separate chain row for each rate segment (like the old code)
             for i, (seg_start, seg_end, seg_label, is_shabbat) in enumerate(seg_detail):
+                # Parse multiplier from label
+                if "200%" in seg_label:
+                    multiplier = 2.0
+                elif "175%" in seg_label:
+                    multiplier = 1.75
+                elif "150%" in seg_label:
+                    multiplier = 1.5
+                elif "125%" in seg_label:
+                    multiplier = 1.25
+                else:
+                    multiplier = 1.0
+
+                # Split this segment by different rates from original segments
+                for s, e, l, sid, apt, adate in segments:
+                    overlap_start = max(seg_start, s)
+                    overlap_end = min(seg_end, e)
+                    if overlap_start < overlap_end:
+                        rate = shift_rates.get(sid, minimum_wage)
+                        shift_name_for_row = shift_names_map.get(sid, "")
+                        apt_for_row = apt or ""
+
+                        display_rows.append({
+                            "start": overlap_start,
+                            "end": overlap_end,
+                            "label": seg_label,
+                            "is_shabbat": is_shabbat,
+                            "multiplier": multiplier,
+                            "rate": rate,
+                            "shift_id": sid,
+                            "shift_name": shift_name_for_row,
+                            "apartment": apt_for_row,
+                        })
+
+            # Sort display rows by start time
+            display_rows.sort(key=lambda x: x["start"])
+
+            # Merge consecutive rows with same rate and same percentage
+            merged_rows = []
+            for row in display_rows:
+                if merged_rows and merged_rows[-1]["end"] == row["start"] and \
+                   merged_rows[-1]["rate"] == row["rate"] and \
+                   merged_rows[-1]["label"] == row["label"]:
+                    # Same rate and percentage, extend the previous row
+                    merged_rows[-1]["end"] = row["end"]
+                    # Keep the shift_name and apartment from the first segment
+                else:
+                    merged_rows.append(row.copy())
+
+            # Now create chain entries from merged_rows
+            for i, row in enumerate(merged_rows):
                 is_first = (i == 0)
-                is_last = (i == len(seg_detail) - 1)
+                is_last = (i == len(merged_rows) - 1)
 
-                seg_duration = seg_end - seg_start
+                row_start = row["start"]
+                row_end = row["end"]
+                row_duration = row_end - row_start
+                row_label = row["label"]
+                row_is_shabbat = row["is_shabbat"]
+                row_multiplier = row["multiplier"]
+                row_rate = row["rate"]
+                row_shift_name = row["shift_name"]
+                row_apt = row["apartment"]
 
-                # Calculate payment and counts for this segment based on its label
+                # Calculate counts for this row
                 seg_c100, seg_c125, seg_c150, seg_c175, seg_c200 = 0, 0, 0, 0, 0
                 seg_c150_shabbat, seg_c150_overtime = 0, 0
-                if "100%" in seg_label:
-                    seg_c100 = seg_duration
-                elif "125%" in seg_label:
-                    seg_c125 = seg_duration
-                elif "150%" in seg_label:
-                    seg_c150 = seg_duration
-                    # Check if Shabbat or overtime
-                    if is_shabbat:
-                        seg_c150_shabbat = seg_duration
+                if "100%" in row_label:
+                    seg_c100 = row_duration
+                elif "125%" in row_label:
+                    seg_c125 = row_duration
+                elif "150%" in row_label:
+                    seg_c150 = row_duration
+                    if row_is_shabbat:
+                        seg_c150_shabbat = row_duration
                     else:
-                        seg_c150_overtime = seg_duration
-                elif "175%" in seg_label:
-                    seg_c175 = seg_duration
-                elif "200%" in seg_label:
-                    seg_c200 = seg_duration
+                        seg_c150_overtime = row_duration
+                elif "175%" in row_label:
+                    seg_c175 = row_duration
+                elif "200%" in row_label:
+                    seg_c200 = row_duration
 
-                seg_pay = (seg_c100/60*1.0 + seg_c125/60*1.25 + seg_c150/60*1.5 + seg_c175/60*1.75 + seg_c200/60*2.0) * effective_rate
+                # Calculate payment for this row
+                seg_pay = (row_duration / 60) * row_multiplier * row_rate
 
-                start_str = f"{seg_start // 60 % 24:02d}:{seg_start % 60:02d}"
-                end_str = f"{seg_end // 60 % 24:02d}:{seg_end % 60:02d}"
+                start_str = f"{row_start // 60 % 24:02d}:{row_start % 60:02d}"
+                end_str = f"{row_end // 60 % 24:02d}:{row_end % 60:02d}"
 
-                # Determine shift type label
+                # Determine shift type label based on the specific shift for this row
                 shift_type_label = ""
-                if shift_name_str:
-                    if "תגבור" in shift_name_str:
+                if row_shift_name:
+                    if "תגבור" in row_shift_name:
                         shift_type_label = "תגבור"
-                    elif "לילה" in shift_name_str:
+                    elif "לילה" in row_shift_name:
                         shift_type_label = "לילה"
-                    elif is_shabbat:
+                    elif "שמירה" in row_shift_name or "דייר" in row_shift_name:
+                        shift_type_label = "שמירה"
+                    elif row_is_shabbat:
                         shift_type_label = "שבת"
                     else:
                         shift_type_label = "חול"
                 else:
-                    shift_type_label = "חול" if not is_shabbat else "שבת"
-                
+                    shift_type_label = "חול" if not row_is_shabbat else "שבת"
+
                 chains.append({
                     "start_time": start_str,
                     "end_time": end_str,
-                    "total_minutes": seg_duration,
+                    "total_minutes": row_duration,
                     "payment": seg_pay,
                     "calc100": seg_c100,
                     "calc125": seg_c125,
@@ -1133,13 +1207,13 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     "calc175": seg_c175,
                     "calc200": seg_c200,
                     "type": "work",
-                    "apartment_name": apt_name,
-                    "shift_name": shift_name_str,
+                    "apartment_name": row_apt,
+                    "shift_name": row_shift_name,
                     "shift_type": shift_type_label,
-                    "segments": [(start_str, end_str, seg_label)],
+                    "segments": [(start_str, end_str, row_label)],
                     "break_reason": break_reason if is_last else "",
-                    "from_prev_day": (seg_start >= MINUTES_PER_DAY) if is_first else False,
-                    "effective_rate": effective_rate,
+                    "from_prev_day": (row_start >= MINUTES_PER_DAY) if is_first else False,
+                    "effective_rate": row_rate,
                 })
 
             # Check if chain ends at 08:00 boundary (1920 = 08:00 + 1440)

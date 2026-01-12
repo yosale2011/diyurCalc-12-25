@@ -22,6 +22,64 @@ from database import get_conn
 logger = logging.getLogger(__name__)
 
 
+def safe_delete_file(file_path: str, max_retries: int = 5, retry_delay: float = 1.0, initial_wait: float = 2.0) -> bool:
+    """
+    Safely delete a file with retry mechanism for Windows file locking issues.
+    
+    Args:
+        file_path: Path to the file to delete
+        max_retries: Maximum number of retry attempts (default: 5)
+        retry_delay: Delay between retries in seconds (default: 1.0)
+        initial_wait: Initial wait time before first deletion attempt in seconds (default: 2.0)
+    
+    Returns:
+        True if file was successfully deleted, False otherwise
+    """
+    import time
+    
+    if not os.path.exists(file_path):
+        logger.debug(f"File does not exist, nothing to delete: {file_path}")
+        return True
+    
+    # Initial wait to allow processes (like Edge/Chrome) to release file handles
+    if initial_wait > 0:
+        logger.debug(f"Waiting {initial_wait} seconds before attempting to delete: {file_path}")
+        time.sleep(initial_wait)
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            os.unlink(file_path)
+            logger.info(f"Successfully deleted file on attempt {attempt}: {file_path}")
+            return True
+        except PermissionError as e:
+            if attempt < max_retries:
+                logger.warning(
+                    f"Failed to delete file (attempt {attempt}/{max_retries}): {file_path}. "
+                    f"Error: {e}. Retrying in {retry_delay} seconds..."
+                )
+                time.sleep(retry_delay)
+            else:
+                logger.error(
+                    f"Failed to delete file after {max_retries} attempts: {file_path}. "
+                    f"Error: {e}. File may be locked by another process."
+                )
+        except FileNotFoundError:
+            # File was already deleted (possibly by another process)
+            logger.debug(f"File already deleted: {file_path}")
+            return True
+        except Exception as e:
+            logger.error(
+                f"Unexpected error deleting file (attempt {attempt}/{max_retries}): {file_path}. "
+                f"Error: {type(e).__name__}: {e}"
+            )
+            if attempt < max_retries:
+                time.sleep(retry_delay)
+            else:
+                return False
+    
+    return False
+
+
 def link_callback(uri, rel):
     """
     Convert HTML URIs to absolute system paths so xhtml2pdf can access those
@@ -235,6 +293,7 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
     import tempfile
     import os
     import re
+    import time
     from fastapi.testclient import TestClient
     from config import config
     
@@ -244,6 +303,10 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
     except ImportError:
         logger.error("Could not import app for PDF generation")
         return None
+
+    temp_html_path = None
+    temp_pdf_path = None
+    process = None
 
     try:
         # 1. Render HTML using TestClient (internal execution, no network deadlock)
@@ -310,59 +373,79 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
             temp_html_path
         ]
 
-        logger.info(f"Generating PDF using Edge from local file: {temp_html_path}")
-        logger.info(f"Running Edge command: {cmd}")
-        result = subprocess.run(cmd, capture_output=True, timeout=45)
+        logger.info(f"Generating PDF using browser from local file: {temp_html_path}")
+        logger.info(f"Running browser command: {cmd}")
+        
+        # Use Popen for better process control
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+        )
+        
+        # Wait for process to complete with timeout
+        try:
+            stdout, stderr = process.communicate(timeout=45)
+            return_code = process.returncode
+        except subprocess.TimeoutExpired:
+            logger.error("Browser process timed out after 45 seconds")
+            process.kill()
+            process.wait()
+            return None
+        finally:
+            # Ensure process is terminated
+            if process.poll() is None:
+                logger.warning("Browser process still running, terminating...")
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    logger.warning("Browser process did not terminate, killing...")
+                    process.kill()
+                    process.wait()
 
-        # Wait for Edge to finish writing the PDF file
-        import time
+        logger.info(f"Browser return code: {return_code}")
+        if stdout:
+            logger.info(f"Browser stdout: {stdout.decode('utf-8', errors='ignore')}")
+        if stderr:
+            logger.info(f"Browser stderr: {stderr.decode('utf-8', errors='ignore')}")
+
+        # Wait for browser to fully release file handles (Windows-specific issue)
+        logger.debug("Waiting for browser to release file handles...")
         time.sleep(2)
-
-        logger.info(f"Edge return code: {result.returncode}")
-        if result.stdout:
-            logger.info(f"Edge stdout: {result.stdout.decode('utf-8', errors='ignore')}")
-        if result.stderr:
-            logger.info(f"Edge stderr: {result.stderr.decode('utf-8', errors='ignore')}")
 
         # Check PDF before cleanup
         pdf_exists = os.path.exists(temp_pdf_path)
         pdf_size = os.path.getsize(temp_pdf_path) if pdf_exists else 0
         logger.info(f"PDF check - exists: {pdf_exists}, size: {pdf_size}, path: {temp_pdf_path}")
 
-        
-        # Cleanup HTML file
-        try:
-            os.unlink(temp_html_path)
-        except:
-            pass
-
-        if result.returncode != 0:
-            logger.error(f"Edge PDF generation error: {result.stderr.decode('utf-8', errors='ignore')}")
+        if return_code != 0:
+            logger.error(f"Browser PDF generation error: {stderr.decode('utf-8', errors='ignore')}")
             # Continue to check if file exists anyway
 
         if pdf_exists and pdf_size > 0:
-
             with open(temp_pdf_path, "rb") as f:
                 pdf_bytes = f.read()
-            try:
-                os.unlink(temp_pdf_path)
-            except:
-                pass
             logger.info(f"PDF generated successfully, size: {len(pdf_bytes)} bytes")
             return pdf_bytes
         else:
             logger.error("PDF file was not created or is empty")
-            if os.path.exists(temp_pdf_path):
-                os.unlink(temp_pdf_path)
             return None
 
     except Exception as e:
         logger.error(f"Error generating PDF: {e}", exc_info=True)
         return None
-
-    except Exception as e:
-        logger.error(f"Error generating PDF: {e}", exc_info=True)
-        return None
+    
+    finally:
+        # Cleanup temp files with retry mechanism
+        if temp_html_path:
+            logger.debug(f"Cleaning up HTML temp file: {temp_html_path}")
+            safe_delete_file(temp_html_path, initial_wait=1.0)
+        
+        if temp_pdf_path:
+            logger.debug(f"Cleaning up PDF temp file: {temp_pdf_path}")
+            safe_delete_file(temp_pdf_path, initial_wait=1.0)
 
 
 def send_email_with_pdf(

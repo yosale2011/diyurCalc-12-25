@@ -674,7 +674,7 @@ def _build_daily_map(
                 # דיווח ששעת הסיום שלו לפני 08:00 שייך ליום העבודה הקודם
                 # אבל רק אם זה המשך של משמרת (לא דיווח עצמאי שמתחיל בחצות)
                 # דיווח עצמאי = הדיווח המקורי התחיל בחצות (00:00) ביום הנוכחי
-                is_standalone_midnight_shift = (s_start == 0 and p_date == r_date and r_start == 0)
+                is_standalone_midnight_shift = (s_start < CUTOFF and p_date == r_date and r_start < CUTOFF)
                 if s_end <= CUTOFF and not is_standalone_midnight_shift:
                     # שייך ליום העבודה הקודם (המשך משמרת)
                     display_date = p_date - timedelta(days=1)

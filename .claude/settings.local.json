@@ -18,7 +18,16 @@
       "Bash(del \"f:\\\\DiyurClock\\\\105\\\\diyur003\\\\check_shift.py\")",
       "Bash(findstr:*)",
       "Bash(pip install:*)",
-      "Bash(git -C \"f:\\\\DiyurClock\\\\104\\\\diyur003\" diff --stat)"
+      "Bash(git -C \"f:\\\\DiyurClock\\\\104\\\\diyur003\" diff --stat)",
+      "Bash(while read hash msg)",
+      "Bash(do if git show \"$hash\":app_utils.py)",
+      "Bash(then echo \"$hash $msg - HAS first_shift_id\" fi done)",
+      "Bash(then)",
+      "Bash(echo:*)",
+      "Bash(fi)",
+      "Bash(done)",
+      "Bash(tasklist:*)",
+      "Bash(powershell -Command:*)"
     ],
     "deny": [],
     "ask": []

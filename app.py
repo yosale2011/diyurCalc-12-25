@@ -6,6 +6,9 @@ from __future__ import annotations
 
 import logging
 import time
+import signal
+import sys
+import atexit
 from datetime import datetime
 
 from fastapi import FastAPI, Request
@@ -18,7 +21,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 import psycopg2
 
 from config import config
-from database import set_demo_mode, get_demo_mode_from_cookie, is_demo_mode, get_current_db_name
+from database import set_demo_mode, get_demo_mode_from_cookie, is_demo_mode, get_current_db_name, close_all_pools
 from logic import (
     calculate_person_monthly_totals,
 )
@@ -52,6 +55,43 @@ from routes.email import (
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Global flag to track shutdown
+_shutting_down = False
+
+
+def cleanup_resources():
+    """Clean up resources before shutdown."""
+    global _shutting_down
+    if _shutting_down:
+        return
+    
+    _shutting_down = True
+    logger.info("Cleaning up resources...")
+    
+    try:
+        # Close database connection pools
+        close_all_pools()
+        logger.info("Resource cleanup completed")
+    except Exception as e:
+        logger.error(f"Error during cleanup: {e}")
+
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals gracefully."""
+    logger.info(f"Received signal {signum}, shutting down gracefully...")
+    cleanup_resources()
+    sys.exit(0)
+
+
+# Register signal handlers for graceful shutdown
+if hasattr(signal, 'SIGTERM'):
+    signal.signal(signal.SIGTERM, signal_handler)
+if hasattr(signal, 'SIGINT'):
+    signal.signal(signal.SIGINT, signal_handler)
+
+# Register cleanup on exit
+atexit.register(cleanup_resources)
 
 # FastAPI app setup
 app = FastAPI(title="ניהול משמרות בענן")
@@ -362,11 +402,26 @@ def demo_mode_status(request: Request):
     }
 
 
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Handle application shutdown."""
+    logger.info("Application shutting down...")
+    cleanup_resources()
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        "app:app",
-        host=config.HOST,
-        port=config.PORT,
-        reload=config.DEBUG
-    )
+    try:
+        uvicorn.run(
+            "app:app",
+            host=config.HOST,
+            port=config.PORT,
+            reload=config.DEBUG
+        )
+    except KeyboardInterrupt:
+        logger.info("Received keyboard interrupt, shutting down...")
+        cleanup_resources()
+    except Exception as e:
+        logger.error(f"Error running application: {e}")
+        cleanup_resources()
+        raise
