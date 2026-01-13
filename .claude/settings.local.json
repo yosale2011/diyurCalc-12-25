@@ -27,7 +27,17 @@
       "Bash(fi)",
       "Bash(done)",
       "Bash(tasklist:*)",
-      "Bash(powershell -Command:*)"
+      "Bash(powershell -Command:*)",
+      "Bash(taskkill:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(ls:*)",
+      "Bash(git config:*)",
+      "Read(//f/**)",
+      "Bash(pushd:*)",
+      "Bash(popd)",
+      "Bash(python3:*)",
+      "Bash(sqlite3:*)"
     ],
     "deny": [],
     "ask": []

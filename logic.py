@@ -974,18 +974,29 @@ def _calculate_chain_wages(
 
                 # Adjust for day offset (if segment crosses midnight)
                 # day_offset מייצג את המרחק מחצות יום שישי
-                # - יום שישי: offset = 0
+                # - יום שישי: offset = 0 (או 1440 אם חצה חצות = שבת בבוקר)
                 # - יום שבת: offset = 1440
                 # - יום ראשון בוקר (זמנים >= 1440 מנורמלים ליום שבת): offset = 2880
-                day_offset = 0
-                if weekday == SATURDAY:
-                    day_offset = MINUTES_PER_DAY
+                day_offset_start = 0
+                day_offset_end = 0
+                if weekday == FRIDAY:
+                    # אם הזמן מתחיל אחרי חצות ביום שישי, זה בעצם שבת בבוקר
+                    if block_abs_start >= MINUTES_PER_DAY:
+                        day_offset_start = MINUTES_PER_DAY
+                    # אם הזמן נגמר אחרי חצות (ומתחיל לפני), זה עובר לשבת בבוקר
+                    if block_abs_end >= MINUTES_PER_DAY:
+                        day_offset_end = MINUTES_PER_DAY
+                elif weekday == SATURDAY:
+                    day_offset_start = MINUTES_PER_DAY
+                    day_offset_end = MINUTES_PER_DAY
                     # אם הזמן המקורי חצה חצות (>=1440), זה בעצם יום ראשון בבוקר
                     if block_abs_start >= MINUTES_PER_DAY:
-                        day_offset = 2 * MINUTES_PER_DAY
+                        day_offset_start = 2 * MINUTES_PER_DAY
+                    if block_abs_end >= MINUTES_PER_DAY:
+                        day_offset_end = 2 * MINUTES_PER_DAY
 
-                abs_start_from_fri = actual_block_start + day_offset
-                abs_end_from_fri = actual_block_end + day_offset
+                abs_start_from_fri = actual_block_start + day_offset_start
+                abs_end_from_fri = actual_block_end + day_offset_end
 
                 # Helper to add segment detail
                 def add_segment_detail(start_min, end_min, rate_label, is_shabbat):

@@ -134,9 +134,15 @@ def get_standby_rate_for_month(
     """
     Get standby rate amount for a specific month.
     First checks history table using "valid until" logic, falls back to current data.
-    
+
     History records store (year, month) as "valid until" - meaning the old value
     was valid up to but NOT including that month.
+
+    Search order:
+    1. Historical rate for specific apartment_type_id
+    2. Historical rate for general (apt_type=NULL)
+    3. Current rate for specific apartment_type_id
+    4. Current rate for general (apt_type=NULL)
 
     Args:
         segment_id: The shift segment ID
@@ -150,36 +156,66 @@ def get_standby_rate_for_month(
     """
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     try:
-        # Find a historical record where the requested month is covered
+        # 1. Try historical record for specific apartment type
         # Logic: requested (year, month) < historical (year, month)
+        if apartment_type_id is not None:
+            cursor.execute("""
+                SELECT amount
+                FROM standby_rates_history
+                WHERE segment_id = %s
+                  AND apartment_type_id = %s
+                  AND marital_status = %s
+                  AND (year > %s OR (year = %s AND month > %s))
+                ORDER BY year ASC, month ASC
+                LIMIT 1
+            """, (segment_id, apartment_type_id, marital_status, year, year, month))
+
+            history = cursor.fetchone()
+            if history:
+                logger.debug(f"Using historical standby rate for segment {segment_id}, apt_type {apartment_type_id} ({year}/{month})")
+                return history["amount"]
+
+        # 2. Try historical record for general (apt_type=NULL)
         cursor.execute("""
             SELECT amount
             FROM standby_rates_history
             WHERE segment_id = %s
-              AND apartment_type_id = %s
+              AND apartment_type_id IS NULL
               AND marital_status = %s
               AND (year > %s OR (year = %s AND month > %s))
             ORDER BY year ASC, month ASC
             LIMIT 1
-        """, (segment_id, apartment_type_id, marital_status, year, year, month))
+        """, (segment_id, marital_status, year, year, month))
 
         history = cursor.fetchone()
-
         if history:
-            logger.debug(f"Using historical standby rate for segment {segment_id} ({year}/{month})")
+            logger.debug(f"Using historical standby rate (general) for segment {segment_id} ({year}/{month})")
             return history["amount"]
 
-        # No history covers this month - use current data from standby_rates table
+        # 3. No history - try current data for specific apartment type
+        if apartment_type_id is not None:
+            cursor.execute("""
+                SELECT amount
+                FROM standby_rates
+                WHERE segment_id = %s
+                AND apartment_type_id = %s
+                AND marital_status = %s
+            """, (segment_id, apartment_type_id, marital_status))
+
+            rate = cursor.fetchone()
+            if rate:
+                return rate["amount"]
+
+        # 4. Fallback to current general rate (apt_type=NULL)
         cursor.execute("""
             SELECT amount
             FROM standby_rates
             WHERE segment_id = %s
-            AND apartment_type_id = %s
+            AND apartment_type_id IS NULL
             AND marital_status = %s
-        """, (segment_id, apartment_type_id, marital_status))
+        """, (segment_id, marital_status))
 
         rate = cursor.fetchone()
-
         if rate:
             return rate["amount"]
 

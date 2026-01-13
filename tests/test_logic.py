@@ -13,17 +13,16 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from logic import (
     calculate_wage_rate,
-    calculate_annual_vacation_quota,
     minutes_to_time_str,
     parse_hhmm,
     span_minutes,
-    overlap_minutes,
     is_shabbat_time,
     REGULAR_HOURS_LIMIT,
     OVERTIME_125_LIMIT,
     FRIDAY,
     SATURDAY
 )
+from utils import calculate_annual_vacation_quota, overlap_minutes
 
 # from logic_enhanced import (
 #     calculate_wage_rate_enhanced,

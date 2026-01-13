@@ -180,21 +180,14 @@ def cached(ttl: int = 300, key_prefix: Optional[str] = None):
         def expensive_calculation(param1, param2):
             # ... expensive operation
             return result
-
-    Note: Cache keys automatically include demo_mode to prevent cross-contamination
-    between production and demo database results.
     """
     def decorator(func: Callable) -> Callable:
         prefix = key_prefix or f"{func.__module__}.{func.__name__}"
 
         @wraps(func)
         def wrapper(*args, **kwargs):
-            # Import here to avoid circular imports
-            from database import is_demo_mode
-
-            # Include demo_mode in cache key to separate prod/demo results
-            demo_suffix = "_demo" if is_demo_mode() else "_prod"
-            cache_key = cache._make_key(prefix + demo_suffix, *args, **kwargs)
+            # Create cache key
+            cache_key = cache._make_key(prefix, *args, **kwargs)
 
             # Check cache
             result = cache.get(cache_key)
