@@ -1,17 +1,17 @@
 
 from typing import Dict, List, Tuple, Any, Optional
 from datetime import datetime, timedelta, date
-from logic import (
+from core.logic import (
     MINUTES_PER_HOUR, MINUTES_PER_DAY, BREAK_THRESHOLD_MINUTES,
-    STANDBY_CANCEL_OVERLAP_THRESHOLD, LOCAL_TZ,
+    STANDBY_CANCEL_OVERLAP_THRESHOLD, DEFAULT_STANDBY_RATE, LOCAL_TZ,
     span_minutes, to_local_date, is_shabbat_time, calculate_wage_rate,
     get_standby_rate, _calculate_chain_wages
 )
-from utils import overlap_minutes, minutes_to_hours_str, to_gematria, month_range_ts
+from utils.utils import overlap_minutes, minutes_to_hours_str, to_gematria, month_range_ts
 from convertdate import hebrew
 import logging
 
-from history import (
+from core.history import (
     get_apartment_type_for_month, get_person_status_for_month,
     get_all_shift_rates_for_month
 )
