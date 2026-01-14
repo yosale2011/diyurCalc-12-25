@@ -1507,21 +1507,27 @@ def _process_daily_map(
                 if seg_type == "standby":
                     # בדיקה האם זו המשכיות של כוננות קודמת
                     is_continuation = (last_etype == "standby" and last_end == seg_start)
-                    
-                    # בדיקה אם כבר שילמנו על המקטע הזה (למקרה שפוצל עקב עבודה באמצע)
+
+                    # בדיקה אם כבר שילמנו על כוננות ביום הזה
+                    # משתמשים במפתח ייחודי: segment_id אם קיים, אחרת מפתח על בסיס apt_type
                     seg_id = event.get("segment_id")
-                    already_paid = (seg_id in paid_standby_ids) if seg_id else False
-                    
+                    apt_type = event.get("apartment_type_id")
+
+                    # יצירת מפתח ייחודי לכוננות - אם אין segment_id, משתמשים ב-apt_type
+                    if seg_id:
+                        standby_key = ("seg", seg_id)
+                    else:
+                        standby_key = ("apt", apt_type)
+
+                    already_paid = standby_key in paid_standby_ids
+
                     if not is_continuation and not already_paid:
-                        seg_id = event.get("segment_id") or 0
-                        apt_type = event.get("apartment_type_id")
                         is_married_val = event.get("is_married")
                         is_married_bool = bool(is_married_val) if is_married_val is not None else False
-                        rate = get_standby_rate_fn(seg_id, apt_type, is_married_bool)
+                        rate = get_standby_rate_fn(seg_id or 0, apt_type, is_married_bool)
                         day_standby_payment += rate
-                        
-                        if seg_id:
-                            paid_standby_ids.add(seg_id)
+
+                        paid_standby_ids.add(standby_key)
                 elif seg_type == "vacation":
                     day_vacation_minutes += (seg_end - seg_start)
 

@@ -806,6 +806,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             d_payment = 0; d_standby_pay = 0
             chains = []
             cancelled_standbys = []
+            paid_standby_ids = set()  # Track paid standbys to avoid double payment
 
             for s, e, label, sid, apt_name, actual_date in work_segments:
                 duration = e - s
@@ -932,9 +933,19 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     if duration <= 0:
                         continue
 
+                    # בדיקה אם כבר שילמנו על כוננות ביום הזה
+                    if seg_id:
+                        standby_key = ("seg", seg_id)
+                    else:
+                        standby_key = ("apt", apt_type)
+
+                    if standby_key in paid_standby_ids:
+                        continue  # כבר שולם, דלג
+
                     # חישוב תשלום כוננות (עם תמיכה בתעריפים היסטוריים)
                     standby_rate = get_standby_rate(conn, seg_id or 0, apt_type, bool(married), year, month) if seg_id else DEFAULT_STANDBY_RATE
                     d_standby_pay += standby_rate
+                    paid_standby_ids.add(standby_key)
 
                     start_str = f"{sb_start // 60 % 24:02d}:{sb_start % 60:02d}"
                     end_str = f"{sb_end // 60 % 24:02d}:{sb_end % 60:02d}"
@@ -1021,6 +1032,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         d_calc100 = 0; d_calc125 = 0; d_calc150 = 0; d_calc175 = 0; d_calc200 = 0
         d_payment = 0; d_standby_pay = 0
         chains = []  # List of chain objects for display
+        paid_standby_ids = set()  # Track paid standbys to avoid double payment
 
         def calculate_chain_pay(segments, minutes_offset=0):
             # segments is list of (start, end, label, shift_id, apartment_name, actual_date)
@@ -1289,9 +1301,23 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             if is_special:
                 if etype == "standby":
                     is_cont = (last_etype == "standby" and last_end == start)
-                    if not is_cont:
-                        rate = get_standby_rate(conn, event.get("seg_id") or 0, event.get("apt"), bool(event.get("married")), year, month)
+
+                    # בדיקה אם כבר שילמנו על כוננות ביום הזה
+                    seg_id = event.get("seg_id")
+                    apt_type = event.get("apt")
+
+                    # יצירת מפתח ייחודי לכוננות
+                    if seg_id:
+                        standby_key = ("seg", seg_id)
+                    else:
+                        standby_key = ("apt", apt_type)
+
+                    already_paid = standby_key in paid_standby_ids
+
+                    if not is_cont and not already_paid:
+                        rate = get_standby_rate(conn, seg_id or 0, apt_type, bool(event.get("married")), year, month)
                         d_standby_pay += rate
+                        paid_standby_ids.add(standby_key)
 
                     chains.append({
                         "start_time": f"{start // 60 % 24:02d}:{start % 60:02d}",

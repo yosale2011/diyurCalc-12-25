@@ -13,7 +13,7 @@ from config import config
 from database import get_conn
 from logic import get_payment_codes
 from utils import human_date, format_currency
-from db_sync import sync_database, check_demo_database_status
+from scripts.db_sync import sync_database, check_demo_database_status
 
 logger = logging.getLogger(__name__)
 
