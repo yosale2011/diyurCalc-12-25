@@ -40,7 +40,8 @@
       "Bash(sqlite3:*)",
       "Bash(git -C:*)",
       "Read(//f/DiyurClock/104/diyur003/**)",
-      "Bash(netstat:*)"
+      "Bash(netstat:*)",
+      "Bash(psql:*)"
     ],
     "deny": [],
     "ask": []
