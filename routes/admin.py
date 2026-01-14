@@ -9,10 +9,10 @@ import logging
 from fastapi import Request
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
-from config import config
-from database import get_conn
-from logic import get_payment_codes
-from utils import human_date, format_currency
+from core.config import config
+from core.database import get_conn
+from core.logic import get_payment_codes
+from utils.utils import human_date, format_currency
 from scripts.db_sync import sync_database, check_demo_database_status
 
 logger = logging.getLogger(__name__)
@@ -164,7 +164,7 @@ def demo_sync_status(request: Request) -> JSONResponse:
 # Month Lock APIs
 def get_month_lock_status(request: Request, year: int, month: int) -> JSONResponse:
     """Get lock status for a specific month."""
-    from history import get_month_lock_info, is_month_locked
+    from core.history import get_month_lock_info, is_month_locked
     with get_conn() as conn:
         locked = is_month_locked(conn.conn, year, month)
         lock_info = get_month_lock_info(conn.conn, year, month) if locked else None
@@ -178,7 +178,7 @@ def get_month_lock_status(request: Request, year: int, month: int) -> JSONRespon
 
 async def lock_month_api(request: Request) -> JSONResponse:
     """Lock a month to prevent changes."""
-    from history import lock_month
+    from core.history import lock_month
     try:
         data = await request.json()
         year = data.get("year")
@@ -204,7 +204,7 @@ async def lock_month_api(request: Request) -> JSONResponse:
 
 async def unlock_month_api(request: Request) -> JSONResponse:
     """Unlock a month to allow changes."""
-    from history import unlock_month
+    from core.history import unlock_month
     try:
         data = await request.json()
         year = data.get("year")
@@ -230,7 +230,7 @@ async def unlock_month_api(request: Request) -> JSONResponse:
 # Shift Types Rate History API
 async def update_shift_type_rate(request: Request, shift_type_id: int) -> JSONResponse:
     """Update shift type rate with history support."""
-    from history import save_shift_rate_to_history, is_month_locked
+    from core.history import save_shift_rate_to_history, is_month_locked
     from datetime import datetime
 
     try:
@@ -301,7 +301,7 @@ async def update_shift_type_rate(request: Request, shift_type_id: int) -> JSONRe
 # Shift Time Segments History API
 async def update_shift_segment(request: Request, segment_id: int) -> JSONResponse:
     """Update shift time segment with history support."""
-    from history import save_segment_to_history, is_month_locked
+    from core.history import save_segment_to_history, is_month_locked
     from datetime import datetime
 
     try:
@@ -400,7 +400,7 @@ async def update_shift_segment(request: Request, segment_id: int) -> JSONRespons
 async def save_all_segments_history_for_month(request: Request) -> JSONResponse:
     """Save all current shift time segments to history for a specific month.
     Useful when locking a month or before making bulk changes."""
-    from history import save_all_segments_to_history, is_month_locked
+    from core.history import save_all_segments_to_history, is_month_locked
 
     try:
         data = await request.json()

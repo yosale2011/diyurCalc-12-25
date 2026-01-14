@@ -11,7 +11,7 @@ import os
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from logic import (
+from core.logic import (
     calculate_wage_rate,
     minutes_to_time_str,
     parse_hhmm,
@@ -22,7 +22,7 @@ from logic import (
     FRIDAY,
     SATURDAY
 )
-from utils import calculate_annual_vacation_quota, overlap_minutes
+from utils.utils import calculate_annual_vacation_quota, overlap_minutes
 
 # from logic_enhanced import (
 #     calculate_wage_rate_enhanced,

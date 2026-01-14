@@ -33,7 +33,7 @@ class Config:
     PORT: int = int(os.getenv("PORT", "8000"))
 
     # Application paths
-    BASE_DIR: Path = Path(__file__).parent
+    BASE_DIR: Path = Path(__file__).parent.parent
     TEMPLATES_DIR: Path = BASE_DIR / "templates"
     STATIC_DIR: Optional[Path] = BASE_DIR / "static" if (BASE_DIR / "static").exists() else None
 

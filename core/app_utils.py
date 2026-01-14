@@ -1,17 +1,17 @@
 
 from typing import Dict, List, Tuple, Any, Optional
 from datetime import datetime, timedelta, date
-from logic import (
+from core.logic import (
     MINUTES_PER_HOUR, MINUTES_PER_DAY, BREAK_THRESHOLD_MINUTES,
     STANDBY_CANCEL_OVERLAP_THRESHOLD, LOCAL_TZ,
     span_minutes, to_local_date, is_shabbat_time, calculate_wage_rate,
     get_standby_rate, _calculate_chain_wages
 )
-from utils import overlap_minutes, minutes_to_hours_str, to_gematria, month_range_ts
+from utils.utils import overlap_minutes, minutes_to_hours_str, to_gematria, month_range_ts
 from convertdate import hebrew
 import logging
 
-from history import (
+from core.history import (
     get_apartment_type_for_month, get_person_status_for_month,
     get_all_shift_rates_for_month
 )
@@ -934,16 +934,14 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                         continue
 
                     # בדיקה אם כבר שילמנו על כוננות ביום הזה
-                    if seg_id:
-                        standby_key = ("seg", seg_id)
-                    else:
-                        standby_key = ("apt", apt_type)
+                    # כוננות משולמת פעם אחת ליום לכל סוג דירה, לא משנה מאיזו משמרת
+                    standby_key = ("apt", apt_type)
 
                     if standby_key in paid_standby_ids:
                         continue  # כבר שולם, דלג
 
                     # חישוב תשלום כוננות (עם תמיכה בתעריפים היסטוריים)
-                    standby_rate = get_standby_rate(conn, seg_id or 0, apt_type, bool(married), year, month) if seg_id else DEFAULT_STANDBY_RATE
+                    standby_rate = get_standby_rate(conn, seg_id or 0, apt_type, bool(married), year, month)
                     d_standby_pay += standby_rate
                     paid_standby_ids.add(standby_key)
 
@@ -1303,14 +1301,12 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     is_cont = (last_etype == "standby" and last_end == start)
 
                     # בדיקה אם כבר שילמנו על כוננות ביום הזה
+                    # כוננות משולמת פעם אחת ליום לכל סוג דירה, לא משנה מאיזו משמרת
                     seg_id = event.get("seg_id")
                     apt_type = event.get("apt")
 
-                    # יצירת מפתח ייחודי לכוננות
-                    if seg_id:
-                        standby_key = ("seg", seg_id)
-                    else:
-                        standby_key = ("apt", apt_type)
+                    # מפתח ייחודי לפי סוג דירה בלבד - כוננות אחת ליום לכל סוג דירה
+                    standby_key = ("apt", apt_type)
 
                     already_paid = standby_key in paid_standby_ids
 

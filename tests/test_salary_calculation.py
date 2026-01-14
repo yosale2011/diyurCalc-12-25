@@ -25,7 +25,7 @@ from decimal import Decimal
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from logic import (
+from core.logic import (
     calculate_wage_rate,
     _calculate_chain_wages,
     is_shabbat_time,
@@ -654,9 +654,9 @@ def run_real_data_tests():
     print("="*70)
 
     try:
-        from database import get_pooled_connection, return_connection
-        from logic import calculate_person_monthly_totals
-        from app_utils import get_daily_segments_data
+        from core.database import get_pooled_connection, return_connection
+        from core.logic import calculate_person_monthly_totals
+        from core.app_utils import get_daily_segments_data
     except ImportError as e:
         print(f"שגיאה בייבוא: {e}")
         print("וודא שאתה מריץ מתיקיית הפרויקט")
@@ -687,7 +687,7 @@ def run_real_data_tests():
 def test_worker_calculation(conn, worker_name: str, year: int, month: int):
     """בדיקת חישוב לעובד ספציפי"""
 
-    from logic import calculate_person_monthly_totals
+    from core.logic import calculate_person_monthly_totals
 
     # מציאת העובד
     cursor = conn.cursor()
@@ -767,8 +767,8 @@ def test_specific_day(conn, worker_name: str, test_date: date):
 def compare_logic_and_display(conn, person_id: int, year: int, month: int):
     """השוואה בין חישוב logic.py לתצוגה app_utils.py"""
 
-    from logic import calculate_person_monthly_totals
-    from app_utils import get_daily_segments_data
+    from core.logic import calculate_person_monthly_totals
+    from core.app_utils import get_daily_segments_data
 
     print("\n" + "-"*50)
     print("השוואה בין logic.py ל-app_utils.py")

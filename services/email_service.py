@@ -16,8 +16,8 @@ from io import BytesIO
 
 from xhtml2pdf import pisa
 
-from config import config
-from database import get_conn
+from core.config import config
+from core.database import get_conn
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,7 @@ def link_callback(uri, rel):
 
     # Handle explicit font request
     if 'arial.ttf' in uri:
-        return os.path.join(os.getcwd(), 'arial.ttf')
+        return os.path.join(os.getcwd(), 'static', 'fonts', 'arial.ttf')
 
     # handle absolute paths
     if os.path.isabs(uri):
@@ -295,7 +295,7 @@ def generate_guide_pdf(conn, person_id: int, year: int, month: int) -> Optional[
     import re
     import time
     from fastapi.testclient import TestClient
-    from config import config
+    from core.config import config
     
     # Import app inside function to avoid circular dependency
     try:

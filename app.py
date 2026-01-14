@@ -20,13 +20,13 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 import psycopg2
 
-from config import config
-from database import set_demo_mode, get_demo_mode_from_cookie, is_demo_mode, get_current_db_name, close_all_pools
-from logic import (
+from core.config import config
+from core.database import set_demo_mode, get_demo_mode_from_cookie, is_demo_mode, get_current_db_name, close_all_pools
+from core.logic import (
     calculate_person_monthly_totals,
 )
-from utils import human_date
-from utils import calculate_accruals, format_currency
+from utils.utils import human_date
+from utils.utils import calculate_accruals, format_currency
 from routes.home import home
 from routes.guide import simple_summary_view, guide_view
 from routes.admin import (
@@ -181,7 +181,7 @@ def debug_filters():
 def health_check():
     """Health check endpoint that tests database connectivity."""
     try:
-        from database import get_conn
+        from core.database import get_conn
         with get_conn() as conn:
             # Simple query to test connection
             conn.execute("SELECT 1").fetchone()

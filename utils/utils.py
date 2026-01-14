@@ -7,7 +7,7 @@ from __future__ import annotations
 from datetime import datetime, date
 from typing import Dict, Optional
 
-from config import config
+from core.config import config
 
 # Import LOCAL_TZ from config for accruals calculation
 LOCAL_TZ = config.LOCAL_TZ

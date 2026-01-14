@@ -11,13 +11,13 @@ from typing import Optional
 from fastapi import Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from config import config
-from database import get_conn
-from logic import (
+from core.config import config
+from core.database import get_conn
+from core.logic import (
     available_months_from_db,
     get_active_guides,
 )
-from utils import month_range_ts, human_date, format_currency
+from utils.utils import month_range_ts, human_date, format_currency
 
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))

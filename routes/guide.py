@@ -12,18 +12,18 @@ from typing import Optional, Tuple, List, Dict, Any
 from fastapi import Request, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from config import config
-from database import get_conn
-from logic import (
+from core.config import config
+from core.database import get_conn
+from core.logic import (
     DEFAULT_MINIMUM_WAGE,
     get_shabbat_times_cache,
     get_payment_codes,
     get_available_months_for_person,
     calculate_person_monthly_totals,
 )
-from history import get_minimum_wage_for_month
-from app_utils import get_daily_segments_data
-from utils import human_date, format_currency, month_range_ts
+from core.history import get_minimum_wage_for_month
+from core.app_utils import get_daily_segments_data
+from utils.utils import human_date, format_currency, month_range_ts
 import psycopg2.extras
 
 logger = logging.getLogger(__name__)

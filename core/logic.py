@@ -8,8 +8,8 @@ from zoneinfo import ZoneInfo
 from convertdate import hebrew
 
 # Import utilities and config
-from config import config
-from cache_manager import cached, cache
+from core.config import config
+from utils.cache_manager import cached, cache
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -213,7 +213,7 @@ def get_standby_rate(conn, segment_id: int, apartment_type_id: int | None, is_ma
 
     # If year/month provided, try historical rates first using "valid until" logic
     if year is not None and month is not None:
-        from history import get_standby_rate_for_month
+        from core.history import get_standby_rate_for_month
         historical_amount = get_standby_rate_for_month(
             conn, segment_id, apartment_type_id, marital_status, year, month
         )
@@ -265,7 +265,7 @@ def available_months(rows: Iterable[Dict]) -> List[Tuple[int, int]]:
 @cached(ttl=300)  # Cache for 5 minutes
 def available_months_from_db() -> List[Tuple[int, int]]:
     """Fetch distinct months from time_reports table."""
-    from database import get_pooled_connection, return_connection
+    from core.database import get_pooled_connection, return_connection
     conn = get_pooled_connection()
     try:
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
@@ -481,7 +481,7 @@ def _build_daily_map(
     בניית מפת ימים מדיווחים.
     מחלצת את הלוגיקה המשותפת של בניית daily_map משתי הפונקציות.
     """
-    from utils import overlap_minutes
+    from utils.utils import overlap_minutes
     daily_map = {}
 
     for r in reports:
@@ -1168,7 +1168,7 @@ def _process_daily_map(
     Returns:
         (day_totals, work_days_set, vacation_days_set)
     """
-    from utils import calculate_accruals
+    from utils.utils import calculate_accruals
     WORK_DAY_CUTOFF = 480  # 08:00
 
     totals = {
@@ -1509,15 +1509,12 @@ def _process_daily_map(
                     is_continuation = (last_etype == "standby" and last_end == seg_start)
 
                     # בדיקה אם כבר שילמנו על כוננות ביום הזה
-                    # משתמשים במפתח ייחודי: segment_id אם קיים, אחרת מפתח על בסיס apt_type
+                    # כוננות משולמת פעם אחת ליום לכל סוג דירה, לא משנה מאיזו משמרת
                     seg_id = event.get("segment_id")
                     apt_type = event.get("apartment_type_id")
 
-                    # יצירת מפתח ייחודי לכוננות - אם אין segment_id, משתמשים ב-apt_type
-                    if seg_id:
-                        standby_key = ("seg", seg_id)
-                    else:
-                        standby_key = ("apt", apt_type)
+                    # מפתח ייחודי לפי סוג דירה בלבד - כוננות אחת ליום לכל סוג דירה
+                    standby_key = ("apt", apt_type)
 
                     already_paid = standby_key in paid_standby_ids
 
@@ -1580,8 +1577,8 @@ def calculate_person_monthly_totals(
     """
     חישוב מדויק של סיכומים חודשיים לעובד.
     """
-    from utils import month_range_ts, calculate_accruals
-    from history import (get_person_status_for_month, get_apartment_type_for_month,
+    from utils.utils import month_range_ts, calculate_accruals
+    from core.history import (get_person_status_for_month, get_apartment_type_for_month,
                          get_all_shift_rates_for_month, get_minimum_wage_for_month)
     
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
@@ -1825,7 +1822,7 @@ def _calculate_totals_from_data(
     Helper for calculating totals from pre-fetched data.
     Uses shared helper functions to avoid code duplication.
     """
-    from utils import calculate_accruals
+    from utils.utils import calculate_accruals
     # Initialize totals
     monthly_totals = {
         "total_hours": 0, "payment": 0, "standby": 0, "standby_payment": 0,
@@ -1954,8 +1951,8 @@ def _calculate_totals_from_data(
 
 def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], Dict]:
     # Import month_range_ts locally to avoid circular imports
-    from utils import month_range_ts
-    from history import (get_person_status_for_month, get_apartment_type_for_month,
+    from utils.utils import month_range_ts
+    from core.history import (get_person_status_for_month, get_apartment_type_for_month,
                          get_all_shift_rates_for_month, get_minimum_wage_for_month)
     
     # 1. Fetch Payment Codes

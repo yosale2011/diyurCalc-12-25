@@ -6,8 +6,8 @@ from dotenv import load_dotenv
 # Add project root to sys.path
 sys.path.append(os.getcwd())
 
-from database import set_demo_mode, get_conn
-from history import save_shift_rate_to_history
+from core.database import set_demo_mode, get_conn
+from core.history import save_shift_rate_to_history
 
 load_dotenv()
 

@@ -11,13 +11,13 @@ from typing import Optional
 from fastapi import Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
-from config import config
-from database import get_conn
-from logic import (
+from core.config import config
+from core.database import get_conn
+from core.logic import (
     get_payment_codes,
     calculate_monthly_summary,
 )
-from utils import human_date, format_currency
+from utils.utils import human_date, format_currency
 import logging
 
 logger = logging.getLogger(__name__)

@@ -37,7 +37,9 @@
       "Bash(pushd:*)",
       "Bash(popd)",
       "Bash(python3:*)",
-      "Bash(sqlite3:*)"
+      "Bash(sqlite3:*)",
+      "Bash(git -C:*)",
+      "Read(//f/DiyurClock/104/diyur003/**)"
     ],
     "deny": [],
     "ask": []

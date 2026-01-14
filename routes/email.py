@@ -11,9 +11,9 @@ from fastapi import Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from config import config
-from database import get_conn
-from email_service import (
+from core.config import config
+from core.database import get_conn
+from services.email_service import (
     get_email_settings,
     save_email_settings,
     test_email_connection,
@@ -21,7 +21,7 @@ from email_service import (
     send_guide_email,
     send_all_guides_email,
 )
-from utils import human_date, format_currency
+from utils.utils import human_date, format_currency
 
 logger = logging.getLogger(__name__)
 

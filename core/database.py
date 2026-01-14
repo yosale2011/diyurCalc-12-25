@@ -15,7 +15,7 @@ import psycopg2
 import psycopg2.extras
 from psycopg2 import pool
 
-from config import config
+from core.config import config
 
 logger = logging.getLogger(__name__)
 

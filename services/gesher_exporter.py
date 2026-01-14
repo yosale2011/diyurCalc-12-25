@@ -275,7 +275,7 @@ def generate_gesher_file_for_person(conn, person_id: int, year: int, month: int)
         Tuple[תוכן הקובץ, קוד מפעל]
     """
     from app import calculate_person_monthly_totals
-    from logic import get_shabbat_times_cache
+    from core.logic import get_shabbat_times_cache
     
     # שליפת פרטי העובד כולל מפעל
     person = conn.execute("""
@@ -373,7 +373,7 @@ def generate_gesher_file(conn, year: int, month: int, filter_name: str = None, c
     Returns:
         תוכן הקובץ כמחרוזת
     """
-    from logic import calculate_monthly_summary
+    from core.logic import calculate_monthly_summary
 
     # טעינת תצורה מהדאטאבייס
     export_codes = load_export_config_from_db(conn)
@@ -489,7 +489,7 @@ def generate_gesher_file_for_multiple(conn, person_ids: List[int], year: int, mo
     Returns:
         Tuple[תוכן הקובץ, קוד מפעל הראשון]
     """
-    from logic import calculate_monthly_summary
+    from core.logic import calculate_monthly_summary
 
     # טעינת תצורה
     export_codes = load_export_config_from_db(conn)
@@ -604,7 +604,7 @@ def get_export_preview(conn, year: int, month: int, limit: int = 50) -> List[Dic
     מחזיר תצוגה מקדימה של הייצוא
     משתמש ב-calculate_monthly_summary לחישוב יעיל של כל העובדים בבת אחת
     """
-    from logic import calculate_monthly_summary
+    from core.logic import calculate_monthly_summary
 
     # טעינת תצורה מהדאטאבייס
     export_codes = load_export_config_from_db(conn)
