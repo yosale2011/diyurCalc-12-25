@@ -5,9 +5,12 @@ Contains helper functions for calculations, formatting, and general utilities.
 from __future__ import annotations
 
 from datetime import datetime, date
-from typing import Dict, Optional
+from typing import Dict, Iterable, List, Tuple
+
+import psycopg2.extras
 
 from core.config import config
+from utils.cache_manager import cached
 
 # Import LOCAL_TZ from config for accruals calculation
 LOCAL_TZ = config.LOCAL_TZ
@@ -201,3 +204,57 @@ def month_range_ts(year: int, month: int) -> tuple[datetime, datetime]:
         end_dt = datetime(year, month + 1, 1, tzinfo=config.LOCAL_TZ)
     # Return datetime objects directly (PostgreSQL prefers this)
     return start_dt, end_dt
+
+
+# =============================================================================
+# Month availability functions
+# =============================================================================
+
+def to_local_date_for_months(ts: int | datetime | date) -> date:
+    """Convert epoch timestamp, datetime, or date object to local date.
+    Helper function for available_months - avoids circular import with time_utils."""
+    from zoneinfo import ZoneInfo
+
+    if isinstance(ts, date) and not isinstance(ts, datetime):
+        return ts
+    if isinstance(ts, datetime):
+        if ts.tzinfo is None:
+            return ts.replace(tzinfo=ZoneInfo("UTC")).astimezone(LOCAL_TZ).date()
+        return ts.astimezone(LOCAL_TZ).date()
+    return datetime.fromtimestamp(ts, LOCAL_TZ).date()
+
+
+def available_months(rows: Iterable[Dict]) -> List[Tuple[int, int]]:
+    """Extract unique (year, month) tuples from iterable of rows with 'date' field."""
+    months: set[Tuple[int, int]] = set()
+    for r in rows:
+        ts = r["date"]
+        if not ts:
+            continue
+        d = to_local_date_for_months(ts)
+        months.add((d.year, d.month))
+    return sorted(months)
+
+
+@cached(ttl=300)  # Cache for 5 minutes
+def available_months_from_db() -> List[Tuple[int, int]]:
+    """Fetch distinct months from time_reports table."""
+    from core.database import get_pooled_connection, return_connection
+    conn = get_pooled_connection()
+    try:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+        # Optimized: extract year/month directly in SQL instead of fetching all dates
+        cursor.execute("""
+            SELECT DISTINCT
+                EXTRACT(YEAR FROM date)::integer AS year,
+                EXTRACT(MONTH FROM date)::integer AS month
+            FROM time_reports
+            WHERE date IS NOT NULL
+            ORDER BY year, month
+        """)
+        rows = cursor.fetchall()
+    finally:
+        cursor.close()
+        return_connection(conn)
+
+    return [(r["year"], r["month"]) for r in rows]

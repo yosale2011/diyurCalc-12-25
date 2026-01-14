@@ -12,7 +12,7 @@ import atexit
 from datetime import datetime
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.exceptions import RequestValidationError
@@ -201,6 +201,13 @@ def home_route(request: Request, month: int | None = None, year: int | None = No
     return home(request, month, year, q)
 
 
+@app.get("/guide", include_in_schema=False)
+@app.get("/guide/", include_in_schema=False)
+def redirect_to_home():
+    """Redirect /guide to home page."""
+    return RedirectResponse(url="/")
+
+
 @app.get("/guide/{person_id}/simple", response_class=HTMLResponse)
 def simple_summary_route(request: Request, person_id: int, month: int | None = None, year: int | None = None):
     """Simple summary view for a guide."""
@@ -211,6 +218,13 @@ def simple_summary_route(request: Request, person_id: int, month: int | None = N
 def guide_route(request: Request, person_id: int, month: int | None = None, year: int | None = None):
     """Detailed guide view."""
     return guide_view(request, person_id, month, year)
+
+
+@app.get("/admin", include_in_schema=False)
+@app.get("/admin/", include_in_schema=False)
+def redirect_admin_to_home():
+    """Redirect /admin to home page."""
+    return RedirectResponse(url="/")
 
 
 @app.get("/admin/payment-codes", response_class=HTMLResponse)

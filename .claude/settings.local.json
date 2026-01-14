@@ -39,7 +39,8 @@
       "Bash(python3:*)",
       "Bash(sqlite3:*)",
       "Bash(git -C:*)",
-      "Read(//f/DiyurClock/104/diyur003/**)"
+      "Read(//f/DiyurClock/104/diyur003/**)",
+      "Bash(netstat:*)"
     ],
     "deny": [],
     "ask": []

@@ -6,7 +6,7 @@ Uses "save on change" approach - current data is used unless there's a historica
 from __future__ import annotations
 
 import logging
-from typing import Optional, Any
+from typing import Optional, Any, List, Dict
 from datetime import datetime
 
 import psycopg2.extras
@@ -131,29 +131,7 @@ def get_standby_rate_for_month(
     year: int,
     month: int
 ) -> Optional[int]:
-    """
-    Get standby rate amount for a specific month.
-    First checks history table using "valid until" logic, falls back to current data.
-
-    History records store (year, month) as "valid until" - meaning the old value
-    was valid up to but NOT including that month.
-
-    Search order:
-    1. Historical rate for specific apartment_type_id
-    2. Historical rate for general (apt_type=NULL)
-    3. Current rate for specific apartment_type_id
-    4. Current rate for general (apt_type=NULL)
-
-    Args:
-        segment_id: The shift segment ID
-        apartment_type_id: The apartment type ID
-        marital_status: 'married' or 'single'
-        year: Year
-        month: Month
-
-    Returns:
-        amount in agorot or None
-    """
+   
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     try:
         # 1. Try historical record for specific apartment type
@@ -335,113 +313,6 @@ def unlock_month(conn, year: int, month: int, unlocked_by: int) -> bool:
         cursor.close()
 
 
-def save_person_status_to_history(
-    conn,
-    person_id: int,
-    year: int,
-    month: int,
-    is_married: bool,
-    employer_id: int,
-    employee_type: str,
-    created_by: int = None
-) -> bool:
-    """
-    Save person status to history before a change.
-    Called from the forms system when a change is made.
-
-    Returns:
-        True if saved successfully
-    """
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            INSERT INTO person_status_history
-            (person_id, year, month, is_married, employer_id, employee_type, created_by)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (person_id, year, month)
-            DO UPDATE SET
-                is_married = EXCLUDED.is_married,
-                employer_id = EXCLUDED.employer_id,
-                employee_type = EXCLUDED.employee_type,
-                created_by = EXCLUDED.created_by,
-                created_at = NOW()
-        """, (person_id, year, month, is_married, employer_id, employee_type, created_by))
-
-        conn.commit()
-        logger.info(f"Saved person {person_id} status history for {year}/{month}")
-        return True
-    except Exception as e:
-        logger.error(f"Error saving person status history: {e}")
-        return False
-    finally:
-        cursor.close()
-
-
-def save_apartment_status_to_history(
-    conn,
-    apartment_id: int,
-    year: int,
-    month: int,
-    apartment_type_id: int,
-    created_by: int = None
-) -> bool:
-    """
-    Save apartment status to history before a change.
-
-    Returns:
-        True if saved successfully
-    """
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            INSERT INTO apartment_status_history
-            (apartment_id, year, month, apartment_type_id, created_by)
-            VALUES (%s, %s, %s, %s, %s)
-            ON CONFLICT (apartment_id, year, month)
-            DO UPDATE SET
-                apartment_type_id = EXCLUDED.apartment_type_id,
-                created_by = EXCLUDED.created_by,
-                created_at = NOW()
-        """, (apartment_id, year, month, apartment_type_id, created_by))
-
-        conn.commit()
-        logger.info(f"Saved apartment {apartment_id} status history for {year}/{month}")
-        return True
-    except Exception as e:
-        logger.error(f"Error saving apartment status history: {e}")
-        return False
-    finally:
-        cursor.close()
-
-
-def save_standby_rates_to_history(conn, year: int, month: int, created_by: int = None) -> bool:
-    """
-    Save all current standby rates to history for a specific month.
-    Usually called before making rate changes.
-
-    Returns:
-        True if saved successfully
-    """
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            INSERT INTO standby_rates_history
-            (year, month, original_rate_id, segment_id, apartment_type_id, marital_status, amount, created_by)
-            SELECT %s, %s, id, segment_id, apartment_type_id, marital_status, amount, %s
-            FROM standby_rates
-            ON CONFLICT DO NOTHING
-        """, (year, month, created_by))
-
-        conn.commit()
-        logger.info(f"Saved standby rates history for {year}/{month}")
-        return True
-    except Exception as e:
-        logger.error(f"Error saving standby rates history: {e}")
-        return False
-    finally:
-        cursor.close()
-
-
 def get_historical_months(conn, person_id: int = None) -> list:
     """
     Get list of months that have historical data.
@@ -571,35 +442,6 @@ def save_shift_rate_to_history(
         return True
     except Exception as e:
         logger.error(f"Error saving shift rate history: {e}")
-        return False
-    finally:
-        cursor.close()
-
-
-def save_all_shift_rates_to_history(conn, year: int, month: int, created_by: int = None) -> bool:
-    """
-    Save all current shift rates to history for a specific month.
-    Called before making rate changes or when locking a month.
-
-    Returns:
-        True if saved successfully
-    """
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            INSERT INTO shift_types_history
-            (year, month, shift_type_id, rate, is_minimum_wage, wage_percentage, created_by)
-            SELECT %s, %s, id, rate, is_minimum_wage, COALESCE(wage_percentage, 100), %s
-            FROM shift_types
-            WHERE rate IS NOT NULL OR is_minimum_wage = FALSE
-            ON CONFLICT (shift_type_id, year, month) DO NOTHING
-        """, (year, month, created_by))
-
-        conn.commit()
-        logger.info(f"Saved all shift rates history for {year}/{month}")
-        return True
-    except Exception as e:
-        logger.error(f"Error saving shift rates history: {e}")
         return False
     finally:
         cursor.close()
@@ -839,14 +681,10 @@ def save_all_segments_to_history(conn, year: int, month: int, created_by: int = 
 # ============================================================================
 
 def get_minimum_wage_for_month(conn, year: int, month: int) -> float:
-    """
-    Get the minimum wage rate for a specific month.
-    Uses effective_from to find the rate that was active at the start of the month.
-
-    Returns:
-        hourly rate in shekels, or default value if not found
-    """
-    DEFAULT_MINIMUM_WAGE = 34.40  # Current default as of April 2024
+   
+    # Validate month
+    if not (1 <= month <= 12):
+        raise ValueError(f"Invalid month: {month}. Must be 1-12.")
 
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     try:
@@ -863,14 +701,91 @@ def get_minimum_wage_for_month(conn, year: int, month: int) -> float:
 
         row = cursor.fetchone()
 
-        if row:
-            # hourly_rate is stored in agorot, convert to shekels
-            return float(row["hourly_rate"]) / 100
+        if row and row["hourly_rate"]:
+            rate = float(row["hourly_rate"]) / 100  # Convert from agorot to shekels
+            if rate > 0:
+                return rate
 
-        logger.warning(f"No minimum wage found for {year}/{month}, using default")
-        return DEFAULT_MINIMUM_WAGE
-    except Exception as e:
-        logger.error(f"Error getting minimum wage for month: {e}")
-        return DEFAULT_MINIMUM_WAGE
+        raise ValueError(
+            f"No minimum wage found in DB for {year}/{month}. "
+            f"Please add the rate to minimum_wage_rates table with effective_from <= {year}-{month:02d}-01"
+        )
     finally:
         cursor.close()
+
+
+def apply_historical_overrides(
+    conn,
+    reports: List[Dict],
+    person_id: int,
+    year: int,
+    month: int
+) -> List[Dict]:
+    """
+    החלת נתונים היסטוריים על דיווחים.
+
+    מעדכן את הדיווחים עם:
+    - סטטוס נישואין היסטורי
+    - סוג דירה היסטורי
+    - תעריפי משמרת היסטוריים
+
+    פרמטרים:
+        conn: חיבור לבסיס הנתונים
+        reports: רשימת דיווחים (כמילונים)
+        person_id: מזהה העובד
+        year: שנה
+        month: חודש
+
+    מחזיר:
+        רשימת דיווחים מעודכנת עם הנתונים ההיסטוריים
+    """
+    if not reports:
+        return []
+
+    # שליפת סטטוס נישואין היסטורי
+    historical_person = get_person_status_for_month(conn, person_id, year, month)
+    historical_is_married = historical_person.get("is_married")
+
+    # בניית מטמון סוגי דירות היסטוריים
+    apartment_ids = {r.get("apartment_id") for r in reports if r.get("apartment_id")}
+    apartment_type_cache = {}
+    for apt_id in apartment_ids:
+        hist_type = get_apartment_type_for_month(conn, apt_id, year, month)
+        if hist_type is not None:
+            apartment_type_cache[apt_id] = hist_type
+
+    # בניית מטמון תעריפי משמרות היסטוריים
+    shift_rates_cache = get_all_shift_rates_for_month(conn, year, month)
+
+    # החלת הנתונים ההיסטוריים על כל דיווח
+    processed_reports = []
+    for r in reports:
+        r_dict = dict(r) if not isinstance(r, dict) else r.copy()
+
+        # עדכון סטטוס נישואין
+        if historical_is_married is not None:
+            r_dict["is_married"] = historical_is_married
+
+        # עדכון סוג דירה - עדיפות: rate_apartment_type_id > היסטורי > נוכחי
+        rate_apt_type = r_dict.get("rate_apartment_type_id")
+        if rate_apt_type:
+            r_dict["apartment_type_id"] = rate_apt_type
+        else:
+            apt_id = r_dict.get("apartment_id")
+            if apt_id and apt_id in apartment_type_cache:
+                old_val = r_dict.get("apartment_type_id")
+                r_dict["apartment_type_id"] = apartment_type_cache[apt_id]
+                if old_val != apartment_type_cache[apt_id]:
+                    logger.debug(f"Historical override for apt {apt_id}: {old_val} -> {apartment_type_cache[apt_id]} ({year}/{month})")
+
+        # עדכון תעריפי משמרת
+        shift_type_id = r_dict.get("shift_type_id")
+        if shift_type_id and shift_type_id in shift_rates_cache:
+            rate_info = shift_rates_cache[shift_type_id]
+            r_dict["shift_rate"] = rate_info.get("rate")
+            r_dict["shift_is_minimum_wage"] = rate_info.get("is_minimum_wage")
+            r_dict["shift_wage_percentage"] = rate_info.get("wage_percentage")
+
+        processed_reports.append(r_dict)
+
+    return processed_reports

@@ -1,58 +1,22 @@
 
 from typing import Dict, List, Tuple, Any, Optional
 from datetime import datetime, timedelta, date
-from core.logic import (
+from logic import (
     MINUTES_PER_HOUR, MINUTES_PER_DAY, BREAK_THRESHOLD_MINUTES,
     STANDBY_CANCEL_OVERLAP_THRESHOLD, LOCAL_TZ,
-    NIGHT_SHIFT_WORK_FIRST_MINUTES, NOON_MINUTES,
-    MORNING_STANDBY_END_MINUTES, WORK_DAY_END_NORMALIZED,
-    WORK_DAY_START_MINUTES, MEDICAL_ESCORT_SHIFT_ID,
-    MINIMUM_ESCORT_MINUTES, NIGHT_STANDBY_WAGE_PERCENT,
-    WAGE_MULTIPLIER_100, WAGE_MULTIPLIER_125, WAGE_MULTIPLIER_150,
-    WAGE_MULTIPLIER_175, WAGE_MULTIPLIER_200,
     span_minutes, to_local_date, is_shabbat_time, calculate_wage_rate,
     get_standby_rate, _calculate_chain_wages
 )
-from core.time_utils import minutes_to_time_str
-from utils.utils import overlap_minutes, minutes_to_hours_str, to_gematria, month_range_ts
+from utils import overlap_minutes, minutes_to_hours_str, to_gematria, month_range_ts
 from convertdate import hebrew
 import logging
 
-from core.history import apply_historical_overrides
+from history import (
+    get_apartment_type_for_month, get_person_status_for_month,
+    get_all_shift_rates_for_month
+)
 
 logger = logging.getLogger(__name__)
-
-
-def _get_segment_label(effective_seg_type: str, wage_percent: int) -> str:
-    """
-    קבלת תווית תצוגה לסגמנט לפי סוג ואחוז שכר.
-
-    פרמטרים:
-        effective_seg_type: סוג הסגמנט (standby, vacation, sick, work)
-        wage_percent: אחוז השכר
-
-    מחזיר:
-        תווית תצוגה בעברית
-    """
-    if effective_seg_type == "standby":
-        return "כוננות"
-    elif effective_seg_type == "vacation":
-        return "חופשה"
-    elif effective_seg_type == "sick":
-        return "מחלה"
-    elif wage_percent == 100:
-        return "100%"
-    elif wage_percent == 125:
-        return "125%"
-    elif wage_percent == 150:
-        return "150%"
-    elif wage_percent == 175:
-        return "175%"
-    elif wage_percent == 200:
-        return "200%"
-    else:
-        return f"{wage_percent}%"
-
 
 def get_effective_hourly_rate(report, minimum_wage: float) -> float:
     """
@@ -75,196 +39,6 @@ def get_effective_hourly_rate(report, minimum_wage: float) -> float:
         return float(shift_rate) / 100
 
     return minimum_wage
-
-
-def _generate_night_shift_segments(entry_time: int, exit_time: int) -> List[Dict]:
-    """
-    יצירת סגמנטים דינמיים למשמרת לילה.
-
-    החוק:
-    - 2 שעות ראשונות: עבודה (100%)
-    - עד 06:30: כוננות (24%)
-    - 06:30-08:00: עבודה (100%)
-
-    פרמטרים:
-        entry_time: זמן כניסה בדקות מחצות
-        exit_time: זמן יציאה בדקות מחצות (יכול לעבור 1440 אם למחרת)
-
-    מחזיר:
-        רשימת מילוני סגמנטים
-    """
-    dynamic_segments = []
-
-    # סגמנט 1: 2 שעות ראשונות עבודה
-    work1_start = entry_time
-    work1_end = min(entry_time + NIGHT_SHIFT_WORK_FIRST_MINUTES, exit_time)
-    if work1_end > work1_start:
-        dynamic_segments.append({
-            "start_time": minutes_to_time_str(work1_start),
-            "end_time": minutes_to_time_str(work1_end),
-            "wage_percent": 100,
-            "segment_type": "work",
-            "id": None
-        })
-
-    # סגמנט 2: כוננות מסוף 2 שעות עבודה עד 06:30
-    standby_start = work1_end
-    # אם הכניסה אחרי חצות, 06:30 הוא באותו יום; אחרת ביום הבא
-    standby_end_time = MORNING_STANDBY_END_MINUTES if entry_time < MINUTES_PER_DAY else MORNING_STANDBY_END_MINUTES + MINUTES_PER_DAY
-    if entry_time >= NOON_MINUTES:  # אם נכנס אחרי 12:00, 06:30 הוא למחרת
-        standby_end_time = MORNING_STANDBY_END_MINUTES + MINUTES_PER_DAY
-    standby_end = min(standby_end_time, exit_time)
-    if standby_end > standby_start:
-        dynamic_segments.append({
-            "start_time": minutes_to_time_str(standby_start),
-            "end_time": minutes_to_time_str(standby_end),
-            "wage_percent": NIGHT_STANDBY_WAGE_PERCENT,
-            "segment_type": "standby",
-            "id": None
-        })
-
-    # סגמנט 3: עבודה 06:30-08:00
-    morning_start = standby_end_time
-    morning_end_time = WORK_DAY_START_MINUTES if entry_time < MINUTES_PER_DAY else WORK_DAY_START_MINUTES + MINUTES_PER_DAY
-    if entry_time >= NOON_MINUTES:  # אם נכנס אחרי 12:00, 08:00 הוא למחרת
-        morning_end_time = WORK_DAY_START_MINUTES + MINUTES_PER_DAY
-    morning_end = min(morning_end_time, exit_time)
-    if morning_end > morning_start and morning_start < exit_time:
-        dynamic_segments.append({
-            "start_time": minutes_to_time_str(morning_start),
-            "end_time": minutes_to_time_str(morning_end),
-            "wage_percent": 100,
-            "segment_type": "work",
-            "id": None
-        })
-
-    return dynamic_segments
-
-
-def _calculate_segment_rotation(seg_list_sorted: List[Dict], rep_start_min: int) -> int:
-    """
-    חישוב אינדקס הרוטציה לרשימת הסגמנטים.
-
-    מוצאת את הסגמנט שמתחיל הכי קרוב לזמן התחלת הדיווח.
-    מטפלת בסגמנטי בוקר שעלולים להיות "יום המחרת" עבור דיווחי אחה"צ.
-
-    פרמטרים:
-        seg_list_sorted: רשימת סגמנטים ממוינת לפי זמן התחלה
-        rep_start_min: זמן התחלת הדיווח בדקות (0-1439)
-
-    מחזיר:
-        אינדקס הרוטציה
-    """
-    rotate_idx = 0
-    best_start_diff = -1
-    MORNING_CUTOFF = WORK_DAY_START_MINUTES  # 08:00
-
-    for i, seg in enumerate(seg_list_sorted):
-        seg_start_min, _ = span_minutes(seg["start_time"], seg["end_time"])
-
-        # סגמנטי בוקר (לפני 08:00) עבור דיווחי אחה"צ - יום המחרת
-        is_morning_segment = seg_start_min < MORNING_CUTOFF
-        is_afternoon_report = rep_start_min >= NOON_MINUTES
-
-        if is_morning_segment and is_afternoon_report:
-            continue
-
-        if seg_start_min <= rep_start_min:
-            if seg_start_min > best_start_diff:
-                best_start_diff = seg_start_min
-                rotate_idx = i
-
-    # אם לא נמצא סגמנט לפני זמן הדיווח
-    if best_start_diff == -1 and seg_list_sorted:
-        first_seg_start, _ = span_minutes(seg_list_sorted[0]["start_time"], seg_list_sorted[0]["end_time"])
-
-        if rep_start_min >= NOON_MINUTES:  # דיווח אחה"צ
-            # מצא את הסגמנט הראשון שלא בבוקר
-            for i, seg in enumerate(seg_list_sorted):
-                seg_start_min, _ = span_minutes(seg["start_time"], seg["end_time"])
-                if seg_start_min >= MORNING_CUTOFF:
-                    return i
-            # כל הסגמנטים בבוקר - השתמש בראשון
-            return 0
-        else:
-            # דיווח בוקר
-            if rep_start_min < first_seg_start:
-                return 0
-            else:
-                return len(seg_list_sorted) - 1
-
-    return rotate_idx
-
-
-def _process_standby_overlaps(
-    merged_standbys: List[Tuple],
-    work_segments: List[Tuple]
-) -> Tuple[List[Tuple], List[Dict]]:
-    """
-    טיפול בחפיפות בין כוננות לעבודה.
-
-    אם חפיפה > 70%: ביטול הכוננות
-    אחרת: קיצוץ הכוננות (הסרת זמני העבודה)
-
-    פרמטרים:
-        merged_standbys: רשימת כוננויות ממוזגות (start, end, seg_id, apt_type, married, actual_date, shift_type_id)
-        work_segments: רשימת סגמנטי עבודה (start, end, ...)
-
-    מחזיר:
-        (כוננויות מקוצצות, כוננויות מבוטלות)
-    """
-    cancelled_standbys = []
-    trimmed_standbys = []
-
-    for sb in merged_standbys:
-        sb_start, sb_end, seg_id, apt_type, married, actual_date, shift_type_id = sb
-        duration = sb_end - sb_start
-        if duration <= 0:
-            continue
-
-        # חישוב חפיפה כוללת עם עבודה
-        total_overlap = 0
-        for w in work_segments:
-            total_overlap += overlap_minutes(sb_start, sb_end, w[0], w[1])
-
-        ratio = total_overlap / duration if duration > 0 else 0
-
-        if ratio >= STANDBY_CANCEL_OVERLAP_THRESHOLD:
-            # ביטול כוננות מלא אם חפיפה > 70%
-            if sb_start % MINUTES_PER_DAY > 0:
-                cancelled_standbys.append({
-                    "start": sb_start % MINUTES_PER_DAY,
-                    "end": sb_end % MINUTES_PER_DAY,
-                    "reason": f"חפיפה ({int(ratio*100)}%)"
-                })
-        else:
-            # קיצוץ: הסרת סגמנטי עבודה מהכוננות
-            remaining_parts = [(sb_start, sb_end)]
-
-            for w in work_segments:
-                w_start, w_end = w[0], w[1]
-                new_parts = []
-                for r_start, r_end in remaining_parts:
-                    inter_start = max(r_start, w_start)
-                    inter_end = min(r_end, w_end)
-
-                    if inter_start < inter_end:
-                        # יש חפיפה - הסרתה
-                        if r_start < inter_start:
-                            new_parts.append((r_start, inter_start))
-                        if inter_end < r_end:
-                            new_parts.append((inter_end, r_end))
-                    else:
-                        # אין חפיפה - שמור כמו שהוא
-                        new_parts.append((r_start, r_end))
-                remaining_parts = new_parts
-
-            # הוספת חלקים מקוצצים
-            for r_start, r_end in remaining_parts:
-                if r_end > r_start:
-                    trimmed_standbys.append((r_start, r_end, seg_id, apt_type, married, actual_date, shift_type_id))
-
-    return trimmed_standbys, cancelled_standbys
 
 
 def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat_cache: Dict, minimum_wage: float):
@@ -301,8 +75,52 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
     
     person_name = reports[0]["person_name"] if reports else ""
 
-    # החלת נתונים היסטוריים על הדיווחים
-    reports = apply_historical_overrides(conn, reports, person_id, year, month)
+    # Override apartment types and marital status with historical data
+    # Build apartment historical cache
+    apartment_ids = {r["apartment_id"] for r in reports if r["apartment_id"]}
+    apartment_type_cache = {}
+    for apt_id in apartment_ids:
+        hist_type = get_apartment_type_for_month(conn, apt_id, year, month)
+        if hist_type is not None:
+            apartment_type_cache[apt_id] = hist_type
+
+    # Historical marital status
+    historical_person = get_person_status_for_month(conn, person_id, year, month)
+    historical_is_married = historical_person.get("is_married")
+
+    # Build shift rates historical cache
+    shift_rates_cache = get_all_shift_rates_for_month(conn, year, month)
+
+    # Apply historical overrides to reports
+    processed_reports = []
+    for r in reports:
+        r_dict = dict(r)
+        # Override apartment_type_id for rate calculation
+        # Priority: rate_apartment_type_id (if set) > historical > current
+        rate_apt_type = r_dict.get("rate_apartment_type_id")
+        if rate_apt_type:
+            # Use the explicit rate_apartment_type_id from the report
+            r_dict["apartment_type_id"] = rate_apt_type
+        else:
+            # Fall back to historical apartment type
+            apt_id = r_dict.get("apartment_id")
+            if apt_id and apt_id in apartment_type_cache:
+                r_dict["apartment_type_id"] = apartment_type_cache[apt_id]
+        
+        # Override is_married
+        if historical_is_married is not None:
+            r_dict["is_married"] = historical_is_married
+            
+        # Override shift rate with historical value if available
+        shift_type_id = r_dict.get("shift_type_id")
+        if shift_type_id and shift_type_id in shift_rates_cache:
+            rate_info = shift_rates_cache[shift_type_id]
+            r_dict["shift_rate"] = rate_info.get("rate")
+            r_dict["shift_is_minimum_wage"] = rate_info.get("is_minimum_wage")
+            
+        processed_reports.append(r_dict)
+    
+    reports = processed_reports
 
     # Fetch segments
     shift_ids = {r["shift_type_id"] for r in reports if r["shift_type_id"]}
@@ -358,13 +176,13 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         rep_start_orig, rep_end_orig = span_minutes(r["start_time"], r["end_time"])
         r_date = to_local_date(r["date"])
         
-        # משמרת לווי רפואי - לפחות שעה עבודה
-        is_medical_escort = (r["shift_type_id"] == MEDICAL_ESCORT_SHIFT_ID)
+        # משמרת לווי רפואי (148) - לפחות שעה עבודה
+        is_medical_escort = (r["shift_type_id"] == 148)
         escort_bonus_minutes = 0
         if is_medical_escort:
             duration = rep_end_orig - rep_start_orig
-            if duration < MINIMUM_ESCORT_MINUTES:
-                escort_bonus_minutes = MINIMUM_ESCORT_MINUTES - duration
+            if duration < 60:
+                escort_bonus_minutes = 60 - duration
         
         parts = []
         if rep_end_orig <= MINUTES_PER_DAY:
@@ -395,15 +213,70 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         is_fixed_segments_shift = "תגבור" in shift_name_str or is_vacation_report or is_sick_report
 
         # משמרת לילה - סגמנטים דינמיים לפי זמן הכניסה בפועל
+        # החוק: 2 שעות ראשונות עבודה, עד 06:30 כוננות, 06:30-08:00 עבודה
         is_night_shift = (shift_name_str == "משמרת לילה")
         if is_night_shift:
-            entry_time = rep_start_orig
+            # יצירת סגמנטים דינמיים לפי זמן הכניסה בפועל
+            entry_time = rep_start_orig  # זמן הכניסה בדקות
             exit_time = rep_end_orig if rep_end_orig > entry_time else rep_end_orig + MINUTES_PER_DAY
-            seg_list = _generate_night_shift_segments(entry_time, exit_time)
+
+            WORK_FIRST_HOURS = 120  # 2 שעות ראשונות = עבודה
+            STANDBY_END = 390  # 06:30 = 390 דקות
+            MORNING_WORK_START = 390  # 06:30
+            MORNING_WORK_END = 480  # 08:00
+
+            # חישוב הסגמנטים הדינמיים
+            dynamic_segments = []
+
+            # סגמנט 1: 2 שעות ראשונות עבודה
+            work1_start = entry_time
+            work1_end = min(entry_time + WORK_FIRST_HOURS, exit_time)
+            if work1_end > work1_start:
+                dynamic_segments.append({
+                    "start_time": f"{(work1_start // 60) % 24:02d}:{work1_start % 60:02d}",
+                    "end_time": f"{(work1_end // 60) % 24:02d}:{work1_end % 60:02d}",
+                    "wage_percent": 100,
+                    "segment_type": "work",
+                    "id": None
+                })
+
+            # סגמנט 2: כוננות מסוף 2 שעות עבודה עד 06:30
+            standby_start = work1_end
+            # 06:30 - אם הכניסה אחרי חצות, 06:30 הוא באותו יום; אחרת ביום הבא
+            standby_end_time = STANDBY_END if entry_time < MINUTES_PER_DAY else STANDBY_END + MINUTES_PER_DAY
+            if entry_time >= 720:  # אם נכנס אחרי 12:00, 06:30 הוא למחרת
+                standby_end_time = STANDBY_END + MINUTES_PER_DAY
+            standby_end = min(standby_end_time, exit_time)
+            if standby_end > standby_start:
+                dynamic_segments.append({
+                    "start_time": f"{(standby_start // 60) % 24:02d}:{standby_start % 60:02d}",
+                    "end_time": f"{(standby_end // 60) % 24:02d}:{standby_end % 60:02d}",
+                    "wage_percent": 24,
+                    "segment_type": "standby",
+                    "id": None
+                })
+
+            # סגמנט 3: עבודה 06:30-08:00
+            morning_start = standby_end_time
+            morning_end_time = MORNING_WORK_END if entry_time < MINUTES_PER_DAY else MORNING_WORK_END + MINUTES_PER_DAY
+            if entry_time >= 720:  # אם נכנס אחרי 12:00, 08:00 הוא למחרת
+                morning_end_time = MORNING_WORK_END + MINUTES_PER_DAY
+            morning_end = min(morning_end_time, exit_time)
+            if morning_end > morning_start and morning_start < exit_time:
+                dynamic_segments.append({
+                    "start_time": f"{(morning_start // 60) % 24:02d}:{morning_start % 60:02d}",
+                    "end_time": f"{(morning_end // 60) % 24:02d}:{morning_end % 60:02d}",
+                    "wage_percent": 100,
+                    "segment_type": "work",
+                    "id": None
+                })
+
+            # החלפת רשימת הסגמנטים בסגמנטים הדינמיים
+            seg_list = dynamic_segments
 
         # אם זו משמרת תגבור - מוסיפים את הסגמנטים ישירות בלי לחשב חפיפה עם שעות הדיווח
         if is_fixed_segments_shift and seg_list:
-            CUTOFF = WORK_DAY_START_MINUTES  # 08:00
+            CUTOFF = 480  # 08:00
             display_date = r_date  # יום הדיווח
             day_key = display_date.strftime("%d/%m/%Y")
             entry = daily_map.setdefault(day_key, {"buckets": {}, "shifts": set(), "segments": [], "is_fixed_segments": False, "escort_bonus_minutes": 0, "day_shift_types": set()})
@@ -425,7 +298,24 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     effective_seg_type = seg["segment_type"]
 
                 # קביעת תווית
-                label = _get_segment_label(effective_seg_type, seg["wage_percent"])
+                if effective_seg_type == "standby":
+                    label = "כוננות"
+                elif effective_seg_type == "vacation":
+                    label = "חופשה"
+                elif effective_seg_type == "sick":
+                    label = "מחלה"
+                elif seg["wage_percent"] == 100:
+                    label = "100%"
+                elif seg["wage_percent"] == 125:
+                    label = "125%"
+                elif seg["wage_percent"] == 150:
+                    label = "150%"
+                elif seg["wage_percent"] == 175:
+                    label = "175%"
+                elif seg["wage_percent"] == 200:
+                    label = "200%"
+                else:
+                    label = f"{seg['wage_percent']}%"
 
                 entry["buckets"].setdefault(label, 0)
                 entry["buckets"][label] += duration
@@ -441,7 +331,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
 
         for p_date, p_start, p_end, p_escort_bonus in parts:
             # Split segments crossing 08:00 cutoff
-            CUTOFF = WORK_DAY_START_MINUTES  # 08:00
+            CUTOFF = 480  # 08:00
             sub_parts = []
             if p_start < CUTOFF < p_end:
                 sub_parts.append((p_start, CUTOFF))
@@ -454,7 +344,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 # דיווח ששעת הסיום שלו לפני 08:00 שייך ליום העבודה הקודם
                 # אבל רק אם זה המשך של משמרת (לא דיווח עצמאי שמתחיל בחצות)
                 # דיווח עצמאי = הדיווח המקורי התחיל בחצות (00:00) ביום הנוכחי
-                is_standalone_midnight_shift = (s_start < CUTOFF and p_date == r_date and rep_start_orig < CUTOFF)
+                is_standalone_midnight_shift = (s_start == 0 and p_date == r_date and rep_start_orig == 0)
                 if s_end <= CUTOFF and not is_standalone_midnight_shift:
                     # Belongs to previous day's workday (continuation of shift)
                     display_date = p_date - timedelta(days=1)
@@ -497,8 +387,71 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 seg_list_sorted = sorted(seg_list, key=lambda s: span_minutes(s["start_time"], s["end_time"])[0])
 
                 # Rotate the list so that the segment corresponding to the report start time comes first
+                # This ensures that normalization flows correctly (e.g. 06:30-08:00 is end of shift, not start)
+                rotate_idx = 0
                 rep_start_min = rep_start_orig % MINUTES_PER_DAY
-                rotate_idx = _calculate_segment_rotation(seg_list_sorted, rep_start_min)
+
+                # Find the segment that starts closest to (and before/at) the report start time
+                best_start_diff = -1
+
+                # Define threshold for morning segments: segments before 08:00 might be "next day" segments
+                MORNING_CUTOFF = 480  # 08:00
+
+                for i, seg in enumerate(seg_list_sorted):
+                    seg_start_min, _ = span_minutes(seg["start_time"], seg["end_time"])
+
+                    # Fix for bug: When report starts in afternoon (e.g. 15:00) and a segment starts
+                    # in early morning (e.g. 06:30), that segment is likely NEXT DAY, not before report.
+                    # This prevents treating 06:30-08:00 as the first segment for a 15:00-08:00 report.
+                    is_morning_segment = seg_start_min < MORNING_CUTOFF
+                    is_afternoon_report = rep_start_min >= 720  # 12:00
+
+                    if is_morning_segment and is_afternoon_report:
+                        # Skip this morning segment - it's next day, not before the report
+                        continue
+
+                    if seg_start_min <= rep_start_min:
+                        if seg_start_min > best_start_diff:
+                            best_start_diff = seg_start_min
+                            rotate_idx = i
+                    elif best_start_diff == -1:
+                        # If we haven't found any starting before, and this is the first one,
+                        # checking implies we might need to wrap around.
+                        # But we continue to see if there are others.
+                        pass
+
+                # If no segment starts before report time:
+                # - If report starts BEFORE the first segment of the shift definition,
+                #   keep rotate_idx=0 (start from the first segment)
+                # - If report starts AFTER all segments (late in day),
+                #   then it might belong to the LAST segment wrapping around
+                # For a report 08:00-08:00 with first segment at 12:00,
+                # the 08:00-12:00 gap is just waiting time, so start from segment 0
+                if best_start_diff == -1 and seg_list_sorted:
+                    first_seg_start, _ = span_minutes(seg_list_sorted[0]["start_time"], seg_list_sorted[0]["end_time"])
+
+                    # For afternoon reports, find first non-morning segment
+                    if rep_start_min >= 720:  # Report is in afternoon/evening
+                        first_afternoon_idx = None
+                        for i, seg in enumerate(seg_list_sorted):
+                            seg_start_min, _ = span_minutes(seg["start_time"], seg["end_time"])
+                            if seg_start_min >= MORNING_CUTOFF:
+                                first_afternoon_idx = i
+                                break
+
+                        if first_afternoon_idx is not None:
+                            rotate_idx = first_afternoon_idx
+                        else:
+                            # All segments are morning - unusual case, use first
+                            rotate_idx = 0
+                    else:
+                        # Report is in morning/early hours, use standard logic
+                        if rep_start_min < first_seg_start:
+                            rotate_idx = 0
+                        else:
+                            # Report starts late in morning (e.g. 05:00)
+                            rotate_idx = len(seg_list_sorted) - 1
+
                 seg_list_ordered = seg_list_sorted[rotate_idx:] + seg_list_sorted[:rotate_idx]
                 
                 # Normalize segments from shift definition to be continuous
@@ -549,9 +502,26 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                          effective_seg_type = "vacation"
                     else:
                          effective_seg_type = seg["segment_type"]
-
-                    label = _get_segment_label(effective_seg_type, seg["wage_percent"])
-
+                    
+                    if effective_seg_type == "standby":
+                        label = "כוננות"
+                    elif effective_seg_type == "vacation":
+                        label = "חופשה"
+                    elif effective_seg_type == "sick":
+                        label = "מחלה"
+                    elif seg["wage_percent"] == 100:
+                        label = "100%"
+                    elif seg["wage_percent"] == 125:
+                        label = "125%"
+                    elif seg["wage_percent"] == 150:
+                        label = "150%"
+                    elif seg["wage_percent"] == 175:
+                        label = "175%"
+                    elif seg["wage_percent"] == 200:
+                        label = "200%"
+                    else:
+                        label = f"{seg['wage_percent']}%"
+                    
                     entry["buckets"].setdefault(label, 0)
                     entry["buckets"][label] += overlap
                     
@@ -776,7 +746,56 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 merged_standbys.append((sb_start, sb_end, seg_id, apt_type, married, actual_date, shift_type_id))
 
         # Standby Trim Logic - subtract work time from standby instead of cancelling
-        standby_segments, cancelled_standbys = _process_standby_overlaps(merged_standbys, work_segments)
+        cancelled_standbys = []
+        trimmed_standbys = []
+        for sb in merged_standbys:
+            sb_start, sb_end, seg_id, apt_type, married, actual_date, shift_type_id = sb
+            duration = sb_end - sb_start
+            if duration <= 0: continue
+
+            # Calculate total overlap with work
+            total_overlap = 0
+            for w in work_segments:
+                total_overlap += overlap_minutes(sb_start, sb_end, w[0], w[1])
+
+            ratio = total_overlap / duration if duration > 0 else 0
+
+            if ratio >= STANDBY_CANCEL_OVERLAP_THRESHOLD:
+                # Cancel standby completely if >70% overlap
+                if sb_start % MINUTES_PER_DAY > 0:
+                    cancelled_standbys.append({
+                        "start": sb_start % MINUTES_PER_DAY,
+                        "end": sb_end % MINUTES_PER_DAY,
+                        "reason": f"חפיפה ({int(ratio*100)}%)"
+                    })
+            else:
+                # Trim: subtract work segments from standby
+                remaining_parts = [(sb_start, sb_end)]
+
+                for w in work_segments:
+                    w_start, w_end = w[0], w[1]
+                    new_parts = []
+                    for r_start, r_end in remaining_parts:
+                        inter_start = max(r_start, w_start)
+                        inter_end = min(r_end, w_end)
+
+                        if inter_start < inter_end:
+                            # There is overlap - subtract it
+                            if r_start < inter_start:
+                                new_parts.append((r_start, inter_start))
+                            if inter_end < r_end:
+                                new_parts.append((inter_end, r_end))
+                        else:
+                            # No overlap - keep as is
+                            new_parts.append((r_start, r_end))
+                    remaining_parts = new_parts
+
+                # Add trimmed parts (keep shift_type_id)
+                for r_start, r_end in remaining_parts:
+                    if r_end > r_start:
+                        trimmed_standbys.append((r_start, r_end, seg_id, apt_type, married, actual_date, shift_type_id))
+
+        standby_segments = trimmed_standbys
         
         # Calculate Chains
         chains_detail = []
@@ -787,7 +806,6 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             d_payment = 0; d_standby_pay = 0
             chains = []
             cancelled_standbys = []
-            paid_standby_ids = set()  # Track paid standbys to avoid double payment
 
             for s, e, label, sid, apt_name, actual_date in work_segments:
                 duration = e - s
@@ -812,22 +830,22 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 # חישוב לפי האחוז הקבוע
                 if "100%" in label:
                     d_calc100 += duration
-                    pay = (duration / 60) * WAGE_MULTIPLIER_100 * effective_rate
+                    pay = (duration / 60) * 1.0 * effective_rate
                 elif "125%" in label:
                     d_calc125 += duration
-                    pay = (duration / 60) * WAGE_MULTIPLIER_125 * effective_rate
+                    pay = (duration / 60) * 1.25 * effective_rate
                 elif "150%" in label:
                     d_calc150 += duration
-                    pay = (duration / 60) * WAGE_MULTIPLIER_150 * effective_rate
+                    pay = (duration / 60) * 1.5 * effective_rate
                 elif "175%" in label:
                     d_calc175 += duration
-                    pay = (duration / 60) * WAGE_MULTIPLIER_175 * effective_rate
+                    pay = (duration / 60) * 1.75 * effective_rate
                 elif "200%" in label:
                     d_calc200 += duration
-                    pay = (duration / 60) * WAGE_MULTIPLIER_200 * effective_rate
+                    pay = (duration / 60) * 2.0 * effective_rate
                 else:
                     d_calc100 += duration
-                    pay = (duration / 60) * WAGE_MULTIPLIER_100 * effective_rate
+                    pay = (duration / 60) * 1.0 * effective_rate
 
                 d_payment += pay
 
@@ -914,17 +932,9 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     if duration <= 0:
                         continue
 
-                    # בדיקה אם כבר שילמנו על כוננות ביום הזה
-                    # כוננות משולמת פעם אחת ליום לכל סוג דירה, לא משנה מאיזו משמרת
-                    standby_key = ("apt", apt_type)
-
-                    if standby_key in paid_standby_ids:
-                        continue  # כבר שולם, דלג
-
                     # חישוב תשלום כוננות (עם תמיכה בתעריפים היסטוריים)
-                    standby_rate = get_standby_rate(conn, seg_id or 0, apt_type, bool(married), year, month)
+                    standby_rate = get_standby_rate(conn, seg_id or 0, apt_type, bool(married), year, month) if seg_id else DEFAULT_STANDBY_RATE
                     d_standby_pay += standby_rate
-                    paid_standby_ids.add(standby_key)
 
                     start_str = f"{sb_start // 60 % 24:02d}:{sb_start % 60:02d}"
                     end_str = f"{sb_end // 60 % 24:02d}:{sb_end % 60:02d}"
@@ -1011,7 +1021,6 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         d_calc100 = 0; d_calc125 = 0; d_calc150 = 0; d_calc175 = 0; d_calc200 = 0
         d_payment = 0; d_standby_pay = 0
         chains = []  # List of chain objects for display
-        paid_standby_ids = set()  # Track paid standbys to avoid double payment
 
         def calculate_chain_pay(segments, minutes_offset=0):
             # segments is list of (start, end, label, shift_id, apartment_name, actual_date)
@@ -1033,35 +1042,11 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             c_200 = result["calc200"]
             seg_detail = result.get("segments_detail", [])
 
-            # Calculate payment by iterating through segments and applying correct rate per segment
-            # Each segment may have a different rate (e.g., cleaning 50, regular 34.40)
-            c_pay = 0
-            for seg_start, seg_end, seg_label, is_shabbat in seg_detail:
-                # Parse multiplier from label
-                if "200%" in seg_label:
-                    multiplier = 2.0
-                elif "175%" in seg_label:
-                    multiplier = 1.75
-                elif "150%" in seg_label:
-                    multiplier = 1.5
-                elif "125%" in seg_label:
-                    multiplier = 1.25
-                else:
-                    multiplier = 1.0
-
-                # Calculate overlap with original segments to get correct rate
-                for s, e, l, sid, apt, adate in segments:
-                    overlap_start = max(seg_start, s)
-                    overlap_end = min(seg_end, e)
-                    if overlap_start < overlap_end:
-                        overlap_duration = overlap_end - overlap_start
-                        rate = shift_rates.get(sid, minimum_wage)
-                        c_pay += (overlap_duration / 60) * multiplier * rate
-
-            # Get effective rate for display (weighted average or first segment)
+            # Get effective rate from first segment's shift_id (all segments in chain should have same rate)
             first_shift_id = segments[0][3] if segments else None
             effective_rate = shift_rates.get(first_shift_id, minimum_wage)
-
+            
+            c_pay = (c_100/60*1.0 + c_125/60*1.25 + c_150/60*1.5 + c_175/60*1.75 + c_200/60*2.0) * effective_rate
             return c_pay, c_100, c_125, c_150, c_175, c_200, seg_detail, effective_rate
 
         def close_chain_and_record(segments, break_reason="", minutes_offset=0):
@@ -1077,118 +1062,68 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             chain_duration = sum(e - s for s, e, l, sid, apt, adate in segments)
             chain_total_minutes = minutes_offset + chain_duration
 
-            # Create a separate chain row for each rate segment, split by different rates
-            # First, build a list of sub-segments split by both percentage AND rate
-            display_rows = []
+            # Get apartment names from segments - segments is (start, end, label, sid, apt_name, actual_date)
+            chain_apartments = set()
+            chain_shift_names = set()
+            for s, e, l, sid, apt, adate in segments:
+                if apt:
+                    chain_apartments.add(apt)
+                if sid:
+                    shift_name = shift_names_map.get(sid, "")
+                    if shift_name:
+                        chain_shift_names.add(shift_name)
+            apt_name = ", ".join(sorted(chain_apartments)) if chain_apartments else ""
+            shift_name_str = ", ".join(sorted(chain_shift_names)) if chain_shift_names else ""
 
+            # Create a separate chain row for each rate segment (like the old code)
             for i, (seg_start, seg_end, seg_label, is_shabbat) in enumerate(seg_detail):
-                # Parse multiplier from label
-                if "200%" in seg_label:
-                    multiplier = 2.0
-                elif "175%" in seg_label:
-                    multiplier = 1.75
-                elif "150%" in seg_label:
-                    multiplier = 1.5
-                elif "125%" in seg_label:
-                    multiplier = 1.25
-                else:
-                    multiplier = 1.0
-
-                # Split this segment by different rates from original segments
-                for s, e, l, sid, apt, adate in segments:
-                    overlap_start = max(seg_start, s)
-                    overlap_end = min(seg_end, e)
-                    if overlap_start < overlap_end:
-                        rate = shift_rates.get(sid, minimum_wage)
-                        shift_name_for_row = shift_names_map.get(sid, "")
-                        apt_for_row = apt or ""
-
-                        display_rows.append({
-                            "start": overlap_start,
-                            "end": overlap_end,
-                            "label": seg_label,
-                            "is_shabbat": is_shabbat,
-                            "multiplier": multiplier,
-                            "rate": rate,
-                            "shift_id": sid,
-                            "shift_name": shift_name_for_row,
-                            "apartment": apt_for_row,
-                        })
-
-            # Sort display rows by start time
-            display_rows.sort(key=lambda x: x["start"])
-
-            # Merge consecutive rows with same rate and same percentage
-            merged_rows = []
-            for row in display_rows:
-                if merged_rows and merged_rows[-1]["end"] == row["start"] and \
-                   merged_rows[-1]["rate"] == row["rate"] and \
-                   merged_rows[-1]["label"] == row["label"]:
-                    # Same rate and percentage, extend the previous row
-                    merged_rows[-1]["end"] = row["end"]
-                    # Keep the shift_name and apartment from the first segment
-                else:
-                    merged_rows.append(row.copy())
-
-            # Now create chain entries from merged_rows
-            for i, row in enumerate(merged_rows):
                 is_first = (i == 0)
-                is_last = (i == len(merged_rows) - 1)
+                is_last = (i == len(seg_detail) - 1)
 
-                row_start = row["start"]
-                row_end = row["end"]
-                row_duration = row_end - row_start
-                row_label = row["label"]
-                row_is_shabbat = row["is_shabbat"]
-                row_multiplier = row["multiplier"]
-                row_rate = row["rate"]
-                row_shift_name = row["shift_name"]
-                row_apt = row["apartment"]
+                seg_duration = seg_end - seg_start
 
-                # Calculate counts for this row
+                # Calculate payment and counts for this segment based on its label
                 seg_c100, seg_c125, seg_c150, seg_c175, seg_c200 = 0, 0, 0, 0, 0
                 seg_c150_shabbat, seg_c150_overtime = 0, 0
-                if "100%" in row_label:
-                    seg_c100 = row_duration
-                elif "125%" in row_label:
-                    seg_c125 = row_duration
-                elif "150%" in row_label:
-                    seg_c150 = row_duration
-                    if row_is_shabbat:
-                        seg_c150_shabbat = row_duration
+                if "100%" in seg_label:
+                    seg_c100 = seg_duration
+                elif "125%" in seg_label:
+                    seg_c125 = seg_duration
+                elif "150%" in seg_label:
+                    seg_c150 = seg_duration
+                    # Check if Shabbat or overtime
+                    if is_shabbat:
+                        seg_c150_shabbat = seg_duration
                     else:
-                        seg_c150_overtime = row_duration
-                elif "175%" in row_label:
-                    seg_c175 = row_duration
-                elif "200%" in row_label:
-                    seg_c200 = row_duration
+                        seg_c150_overtime = seg_duration
+                elif "175%" in seg_label:
+                    seg_c175 = seg_duration
+                elif "200%" in seg_label:
+                    seg_c200 = seg_duration
 
-                # Calculate payment for this row
-                seg_pay = (row_duration / 60) * row_multiplier * row_rate
+                seg_pay = (seg_c100/60*1.0 + seg_c125/60*1.25 + seg_c150/60*1.5 + seg_c175/60*1.75 + seg_c200/60*2.0) * effective_rate
 
-                start_str = f"{row_start // 60 % 24:02d}:{row_start % 60:02d}"
-                end_str = f"{row_end // 60 % 24:02d}:{row_end % 60:02d}"
+                start_str = f"{seg_start // 60 % 24:02d}:{seg_start % 60:02d}"
+                end_str = f"{seg_end // 60 % 24:02d}:{seg_end % 60:02d}"
 
-                # Determine shift type label based on the specific shift for this row
+                # Determine shift type label
                 shift_type_label = ""
-                if row_shift_name:
-                    if "תגבור" in row_shift_name:
+                if shift_name_str:
+                    if "תגבור" in shift_name_str:
                         shift_type_label = "תגבור"
-                    elif "לילה" in row_shift_name:
+                    elif "לילה" in shift_name_str:
                         shift_type_label = "לילה"
-                    elif "שמירה" in row_shift_name or "דייר" in row_shift_name:
-                        shift_type_label = "שמירה"
-                    elif row_is_shabbat:
+                    elif is_shabbat:
                         shift_type_label = "שבת"
                     else:
                         shift_type_label = "חול"
                 else:
-                    shift_type_label = "חול" if not row_is_shabbat else "שבת"
-
+                    shift_type_label = "חול" if not is_shabbat else "שבת"
+                
                 chains.append({
                     "start_time": start_str,
                     "end_time": end_str,
-                    "total_minutes": row_duration,
+                    "total_minutes": seg_duration,
                     "payment": seg_pay,
                     "calc100": seg_c100,
                     "calc125": seg_c125,
@@ -1198,18 +1133,18 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     "calc175": seg_c175,
                     "calc200": seg_c200,
                     "type": "work",
-                    "apartment_name": row_apt,
-                    "shift_name": row_shift_name,
+                    "apartment_name": apt_name,
+                    "shift_name": shift_name_str,
                     "shift_type": shift_type_label,
-                    "segments": [(start_str, end_str, row_label)],
+                    "segments": [(start_str, end_str, seg_label)],
                     "break_reason": break_reason if is_last else "",
-                    "from_prev_day": (row_start >= MINUTES_PER_DAY) if is_first else False,
-                    "effective_rate": row_rate,
+                    "from_prev_day": (seg_start >= MINUTES_PER_DAY) if is_first else False,
+                    "effective_rate": effective_rate,
                 })
 
-            # Check if chain ends at 08:00 boundary (WORK_DAY_END_NORMALIZED = 08:00 + 1440)
+            # Check if chain ends at 08:00 boundary (1920 = 08:00 + 1440)
             # This indicates the chain continues to the next workday
-            chain_ends_at_0800 = (segments[-1][1] == WORK_DAY_END_NORMALIZED) if segments else False
+            chain_ends_at_0800 = (segments[-1][1] == 1920) if segments else False
 
             return pay, c100, c125, c150, c175, c200, chain_total_minutes, chain_ends_at_0800
 
@@ -1280,21 +1215,9 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             if is_special:
                 if etype == "standby":
                     is_cont = (last_etype == "standby" and last_end == start)
-
-                    # בדיקה אם כבר שילמנו על כוננות ביום הזה
-                    # כוננות משולמת פעם אחת ליום לכל סוג דירה, לא משנה מאיזו משמרת
-                    seg_id = event.get("seg_id")
-                    apt_type = event.get("apt")
-
-                    # מפתח ייחודי לפי סוג דירה בלבד - כוננות אחת ליום לכל סוג דירה
-                    standby_key = ("apt", apt_type)
-
-                    already_paid = standby_key in paid_standby_ids
-
-                    if not is_cont and not already_paid:
-                        rate = get_standby_rate(conn, seg_id or 0, apt_type, bool(event.get("married")), year, month)
+                    if not is_cont:
+                        rate = get_standby_rate(conn, event.get("seg_id") or 0, event.get("apt"), bool(event.get("married")), year, month)
                         d_standby_pay += rate
-                        paid_standby_ids.add(standby_key)
 
                     chains.append({
                         "start_time": f"{start // 60 % 24:02d}:{start % 60:02d}",
@@ -1351,7 +1274,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             last_chain_ended_at_0800 = ends_at_0800
 
         # Update carryover for next day
-        # If the last chain ended at 08:00 (WORK_DAY_END_NORMALIZED), save its total for next day
+        # If the last chain ended at 08:00 (1920 normalized), save its total for next day
         if last_chain_ended_at_0800:
             prev_day_carryover_minutes = last_chain_total
         else:

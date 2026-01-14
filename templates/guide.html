@@ -545,7 +545,6 @@
               <th>סוג משמרת</th>
               <th>דירה</th>
               <th>אישור</th>
-              <th>הזכאות לתשלום</th>
             </tr>
           </thead>
           <tbody>
@@ -557,7 +556,6 @@
               <td>{{ shift['report']['shift_name'] or shift['report']['shift_type'] or '-' }}</td>
               <td>{{ shift['report']['apartment_name'] or shift['report']['apartment_id'] or '-' }}</td>
               <td>{{ 'מאושר' if shift['report']['is_approved'] else 'ממתין' }}</td>
-              <td>{{ "%.2f"|format(shift['payment']) }}</td>
             </tr>
             {% endfor %}
           </tbody>

@@ -15,7 +15,6 @@ from fastapi.templating import Jinja2Templates
 from core.config import config
 from core.database import get_conn
 from core.logic import (
-    DEFAULT_MINIMUM_WAGE,
     get_shabbat_times_cache,
     get_payment_codes,
     get_available_months_for_person,
@@ -376,94 +375,8 @@ def guide_view(
                     segments_by_shift.setdefault(seg['shift_type_id'], []).append(seg)
                 cursor.close()
 
-            # Get shift segments with payment calculation
-            shift_segments = []
-            for report in month_reports:
-                # Calculate payment for this specific shift
-                shift_payment = 0.0
-                shift_standby_payment = 0.0
-
-                if report['shift_type_id']:
-                    # Get segments from pre-loaded cache
-                    segments = segments_by_shift.get(report['shift_type_id'], [])
-
-                    if segments:
-                        # Calculate payment based on predefined segments
-                        for seg in segments:
-                            # Convert time strings to minutes
-                            if isinstance(seg['start_time'], str):
-                                hours, minutes = map(int, seg['start_time'].split(':'))
-                                seg_start_min = hours * 60 + minutes
-                            else:
-                                seg_start_min = seg['start_time']
-
-                            if isinstance(seg['end_time'], str):
-                                hours, minutes = map(int, seg['end_time'].split(':'))
-                                seg_end_min = hours * 60 + minutes
-                            else:
-                                seg_end_min = seg['end_time']
-
-                            duration = (seg_end_min - seg_start_min) / 60  # Convert minutes to hours
-
-                            segment_type = seg['segment_type']
-
-                            if segment_type == 'standby':
-                                # Standby payment logic
-                                apt_type = report.get('apartment_type_id')
-                                is_married = report.get('is_married', False)
-                                # Use default standby rate or calculate based on apartment type
-                                standby_rate = 70.0  # Default rate
-                                shift_standby_payment += standby_rate
-                            else:
-                                # Work payment based on wage percent
-                                hourly_rate = MINIMUM_WAGE
-                                if seg['wage_percent'] == 100:
-                                    shift_payment += duration * hourly_rate * 1.0
-                                elif seg['wage_percent'] == 125:
-                                    shift_payment += duration * hourly_rate * 1.25
-                                elif seg['wage_percent'] == 150:
-                                    shift_payment += duration * hourly_rate * 1.5
-                                elif seg['wage_percent'] == 175:
-                                    shift_payment += duration * hourly_rate * 1.75
-                                elif seg['wage_percent'] == 200:
-                                    shift_payment += duration * hourly_rate * 2.0
-                    else:
-                        # No predefined segments - calculate based on actual report times
-                        # This handles "שעת עבודה" and similar shift types
-                        start_time = report.get('start_time')
-                        end_time = report.get('end_time')
-
-                        if start_time and end_time:
-                            # Parse times
-                            if isinstance(start_time, str):
-                                sh, sm = map(int, start_time.split(':'))
-                                start_min = sh * 60 + sm
-                            else:
-                                start_min = start_time.hour * 60 + start_time.minute
-
-                            if isinstance(end_time, str):
-                                eh, em = map(int, end_time.split(':'))
-                                end_min = eh * 60 + em
-                            else:
-                                end_min = end_time.hour * 60 + end_time.minute
-
-                            # Handle overnight shifts
-                            if end_min <= start_min:
-                                end_min += 24 * 60
-
-                            duration_hours = (end_min - start_min) / 60
-
-                            # Use minimum wage at 100% for simple hour reports
-                            shift_payment = duration_hours * MINIMUM_WAGE
-
-                total_shift_payment = shift_payment + shift_standby_payment
-
-                shift_segments.append({
-                    "report": report,
-                    "payment": total_shift_payment,
-                    "work_payment": shift_payment,
-                    "standby_payment": shift_standby_payment
-                })
+            # Get shift segments - just the raw reports without payment calculation
+            shift_segments = [{"report": report} for report in month_reports]
 
     # Calculate total standby count
     total_standby_count = monthly_totals.get("standby", 0)

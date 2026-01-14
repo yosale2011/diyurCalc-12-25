@@ -44,9 +44,6 @@ class Config:
     # Export configuration
     DEFAULT_EXPORT_ENCODING: str = os.getenv("DEFAULT_EXPORT_ENCODING", "utf-8")
 
-    # Wage configuration
-    DEFAULT_MINIMUM_WAGE: float = float(os.getenv("DEFAULT_MINIMUM_WAGE", "34.40"))
-
     # Calculation constants
     STANDARD_WORK_DAYS_PER_MONTH: float = 21.66
     MAX_SICK_DAYS_PER_MONTH: float = 1.5
