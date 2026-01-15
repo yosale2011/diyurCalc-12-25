@@ -10,3 +10,4 @@ ENV/
 *.env
 nul
 _backups/
+.claude/settings.local.json

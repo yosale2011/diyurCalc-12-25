@@ -639,7 +639,7 @@
                   {% endif %}
                 </td>
                 <td>{{ chain.end_time }}</td>
-                <td style="font-size: 0.85em; color: #666;">{{ chain.apartment_name or '-' }}</td>
+                <td style="font-size: 0.85em; color: #666; white-space: nowrap;">{{ chain.apartment_name or '-' }}{% if chain.apartment_type_id == 2 %}<span title="דירה טיפולית" style="color: #e91e63; font-size: 0.65em; margin-right: 2px;">&#x2764;</span>{% endif %}</td>
                 <td>
                   {% if chain.shift_type %}
                   <strong>{{ chain.shift_type }}</strong>

@@ -95,6 +95,10 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
     processed_reports = []
     for r in reports:
         r_dict = dict(r)
+
+        # Save actual apartment type for visual indicator (from apartments table)
+        r_dict["actual_apartment_type_id"] = r_dict.get("apartment_type_id")
+
         # Override apartment_type_id for rate calculation
         # Priority: rate_apartment_type_id (if set) > historical > current
         rate_apt_type = r_dict.get("rate_apartment_type_id")
@@ -321,11 +325,12 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 entry["buckets"][label] += duration
 
                 segment_id = seg.get("id")
-                apartment_type_id = r.get("apartment_type_id")
+                apartment_type_id = r.get("apartment_type_id")  # For rate calculation
+                actual_apartment_type_id = r.get("actual_apartment_type_id")  # For visual indicator
                 is_married = r.get("is_married")
                 apartment_name = r.get("apartment_name", "")
 
-                entry["segments"].append((seg_start, seg_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, r_date))
+                entry["segments"].append((seg_start, seg_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, r_date, actual_apartment_type_id))
 
             continue  # דלג על העיבוד הרגיל עבור משמרת זו
 
@@ -539,11 +544,12 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     
                     segment_id = seg.get("id")
                     apartment_type_id = r.get("apartment_type_id")
+                    actual_apartment_type_id = r.get("actual_apartment_type_id")
                     is_married = r.get("is_married")
                     apartment_name = r.get("apartment_name", "")
 
                     # Store actual_date (p_date) for correct Shabbat calculation even when displayed under different day
-                    entry["segments"].append((eff_start, eff_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, p_date))
+                    entry["segments"].append((eff_start, eff_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, p_date, actual_apartment_type_id))
                     
                 # Uncovered minutes -> work
                 # חישוב שעות עבודה שלא מכוסות ע"י סגמנטים מוגדרים
@@ -594,7 +600,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                             eff_uncov_start, eff_uncov_end, "work", "work",
                             r["shift_type_id"], segment_id,
                             apartment_type_id, is_married,
-                            apartment_name, p_date
+                            apartment_name, p_date, actual_apartment_type_id
                         ))
 
     # Process Daily Segments
@@ -672,22 +678,22 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         sick_segments = []
 
         for seg_entry in raw_segments:
-            # Normalize length to 10 (now includes apartment_name and actual_date)
-            if len(seg_entry) < 10:
+            # Normalize length to 11 (now includes actual_apartment_type_id for visual indicator)
+            if len(seg_entry) < 11:
                 # Pad with None
-                seg_entry = seg_entry + (None,) * (10 - len(seg_entry))
+                seg_entry = seg_entry + (None,) * (11 - len(seg_entry))
 
-            s_start, s_end, s_type, label, sid, seg_id, apt_type, married, apt_name, actual_date = seg_entry
+            s_start, s_end, s_type, label, sid, seg_id, apt_type, married, apt_name, actual_date, actual_apt_type = seg_entry
 
             if s_type == "standby":
                 # Include shift_type_id (sid) for priority selection when merging
-                standby_segments.append((s_start, s_end, seg_id, apt_type, married, actual_date, sid))
+                standby_segments.append((s_start, s_end, seg_id, apt_type, married, actual_date, sid, actual_apt_type))
             elif s_type == "vacation":
                 vacation_segments.append((s_start, s_end, actual_date))
             elif s_type == "sick":
                 sick_segments.append((s_start, s_end, actual_date))
             else:
-                work_segments.append((s_start, s_end, label, sid, apt_name, actual_date))
+                work_segments.append((s_start, s_end, label, sid, apt_name, actual_date, apt_type, actual_apt_type))
                 
         work_segments.sort(key=lambda x: x[0])
         standby_segments.sort(key=lambda x: x[0])
@@ -702,7 +708,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             if k not in seen:
                 deduped.append(w)
                 seen.add(k)
-        work_segments = deduped  # Each is (start, end, label, sid, apt_name, actual_date)
+        work_segments = deduped  # Each is (start, end, label, sid, apt_name, actual_date, apt_type, actual_apt_type)
         
         # Dedup standby - now includes shift_type_id (7 elements)
         deduped_sb = []
@@ -732,7 +738,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     break
 
         for sb in standby_segments:
-            sb_start, sb_end, seg_id, apt_type, married, actual_date, shift_type_id = sb
+            sb_start, sb_end, seg_id, apt_type, married, actual_date, shift_type_id, actual_apt_type = sb
 
             # If day has Shabbat and we found a Shabbat standby seg_id, use it
             if shabbat_standby_seg_id is not None:
@@ -741,15 +747,15 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             if merged_standbys and sb_start <= merged_standbys[-1][1]:  # Overlapping or adjacent
                 # Extend the previous merged standby (seg_id already corrected above)
                 prev = merged_standbys[-1]
-                merged_standbys[-1] = (prev[0], max(prev[1], sb_end), seg_id, apt_type, married, actual_date, shift_type_id)
+                merged_standbys[-1] = (prev[0], max(prev[1], sb_end), seg_id, apt_type, married, actual_date, shift_type_id, actual_apt_type)
             else:
-                merged_standbys.append((sb_start, sb_end, seg_id, apt_type, married, actual_date, shift_type_id))
+                merged_standbys.append((sb_start, sb_end, seg_id, apt_type, married, actual_date, shift_type_id, actual_apt_type))
 
         # Standby Trim Logic - subtract work time from standby instead of cancelling
         cancelled_standbys = []
         trimmed_standbys = []
         for sb in merged_standbys:
-            sb_start, sb_end, seg_id, apt_type, married, actual_date, shift_type_id = sb
+            sb_start, sb_end, seg_id, apt_type, married, actual_date, shift_type_id, actual_apt_type = sb
             duration = sb_end - sb_start
             if duration <= 0: continue
 
@@ -790,10 +796,10 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                             new_parts.append((r_start, r_end))
                     remaining_parts = new_parts
 
-                # Add trimmed parts (keep shift_type_id)
+                # Add trimmed parts (keep shift_type_id and actual_apt_type)
                 for r_start, r_end in remaining_parts:
                     if r_end > r_start:
-                        trimmed_standbys.append((r_start, r_end, seg_id, apt_type, married, actual_date, shift_type_id))
+                        trimmed_standbys.append((r_start, r_end, seg_id, apt_type, married, actual_date, shift_type_id, actual_apt_type))
 
         standby_segments = trimmed_standbys
         
@@ -808,12 +814,12 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             cancelled_standbys = []
             paid_standby_ids = set()  # Track paid standbys to avoid double payment
 
-            for s, e, label, sid, apt_name, actual_date in work_segments:
+            for s, e, label, sid, apt_name, actual_date, apt_type, actual_apt_type in work_segments:
                 duration = e - s
                 # Get effective hourly rate for this shift (uses custom rate if defined)
                 effective_rate = shift_rates.get(sid, minimum_wage)
                 shift_name_str = shift_names_map.get(sid, "") if sid else ""
-                
+
                 # Determine shift type label
                 shift_type_label = ""
                 if shift_name_str:
@@ -827,7 +833,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                         shift_type_label = "חול"
                 else:
                     shift_type_label = "חול"
-                
+
                 # חישוב לפי האחוז הקבוע
                 if "100%" in label:
                     d_calc100 += duration
@@ -865,6 +871,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     "calc200": duration if "200%" in label else 0,
                     "type": "work",
                     "apartment_name": apt_name or "",
+                    "apartment_type_id": actual_apt_type,  # Use actual type for visual indicator
                     "shift_name": shift_name_str,
                     "shift_type": shift_type_label,
                     "segments": [(start_str, end_str, label)],
@@ -928,7 +935,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             # עיבוד כוננויות רק למשמרות תגבור (לא לחופשה/מחלה)
             is_tagbur = any("תגבור" in sn for sn in shift_names)
             if is_tagbur and standby_segments:
-                for sb_start, sb_end, seg_id, apt_type, married, actual_date, _shift_type_id in standby_segments:
+                for sb_start, sb_end, seg_id, apt_type, married, actual_date, _shift_type_id, actual_apt_type in standby_segments:
                     duration = sb_end - sb_start
                     if duration <= 0:
                         continue
@@ -955,6 +962,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                         "calc100": 0, "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0,
                         "type": "standby",
                         "apartment_name": "",
+                        "apartment_type_id": actual_apt_type,  # Use actual type for visual indicator
                         "shift_name": "כוננות",
                         "shift_type": "כוננות",
                         "segments": [(start_str, end_str, "כוננות")],
@@ -992,10 +1000,10 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
 
         # Merge all events for processing
         all_events = []
-        for s, e, l, sid, apt_name, actual_date in work_segments:
-            all_events.append({"start": s, "end": e, "type": "work", "label": l, "shift_id": sid, "apartment_name": apt_name or "", "actual_date": actual_date or day_date})
-        for s, e, seg_id, apt, married, actual_date, _shift_type_id in standby_segments:
-            all_events.append({"start": s, "end": e, "type": "standby", "label": "כוננות", "seg_id": seg_id, "apt": apt, "married": married, "actual_date": actual_date or day_date})
+        for s, e, l, sid, apt_name, actual_date, apt_type, actual_apt_type in work_segments:
+            all_events.append({"start": s, "end": e, "type": "work", "label": l, "shift_id": sid, "apartment_name": apt_name or "", "apartment_type_id": actual_apt_type, "actual_date": actual_date or day_date})
+        for s, e, seg_id, apt, married, actual_date, _shift_type_id, actual_apt_type in standby_segments:
+            all_events.append({"start": s, "end": e, "type": "standby", "label": "כוננות", "seg_id": seg_id, "apt": apt, "actual_apt_type": actual_apt_type, "married": married, "actual_date": actual_date or day_date})
         for s, e, actual_date in vacation_segments:
             all_events.append({"start": s, "end": e, "type": "vacation", "label": "חופשה", "actual_date": actual_date or day_date})
         for s, e, actual_date in sick_segments:
@@ -1032,9 +1040,9 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         paid_standby_ids = set()  # Track paid standbys to avoid double payment
 
         def calculate_chain_pay(segments, minutes_offset=0):
-            # segments is list of (start, end, label, shift_id, apartment_name, actual_date)
+            # segments is list of (start, end, label, shift_id, apartment_name, actual_date, apt_type)
             # Convert to format expected by _calculate_chain_wages: (start, end, shift_id)
-            chain_segs = [(s, e, sid) for s, e, l, sid, apt, adate in segments]
+            chain_segs = [(s, e, sid) for s, e, l, sid, apt, adate, apt_type in segments]
 
             # Use display day_date for Shabbat calculation
             # The display date is the actual calendar date when work was performed
@@ -1068,20 +1076,25 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             pay, c100, c125, c150, c175, c200, seg_detail, effective_rate = calculate_chain_pay(segments, minutes_offset)
 
             # Calculate total chain duration (including offset from previous day)
-            chain_duration = sum(e - s for s, e, l, sid, apt, adate in segments)
+            chain_duration = sum(e - s for s, e, l, sid, apt, adate, apt_type in segments)
             chain_total_minutes = minutes_offset + chain_duration
 
-            # Get apartment names from segments - segments is (start, end, label, sid, apt_name, actual_date)
+            # Get apartment names and types from segments - segments is (start, end, label, sid, apt_name, actual_date, apt_type)
             chain_apartments = set()
             chain_shift_names = set()
-            for s, e, l, sid, apt, adate in segments:
+            chain_apt_types = set()
+            for s, e, l, sid, apt, adate, apt_type in segments:
                 if apt:
                     chain_apartments.add(apt)
+                if apt_type:
+                    chain_apt_types.add(apt_type)
                 if sid:
                     shift_name = shift_names_map.get(sid, "")
                     if shift_name:
                         chain_shift_names.add(shift_name)
             apt_name = ", ".join(sorted(chain_apartments)) if chain_apartments else ""
+            # Use the first (or only) apartment type for the chain
+            chain_apt_type = list(chain_apt_types)[0] if chain_apt_types else None
             shift_name_str = ", ".join(sorted(chain_shift_names)) if chain_shift_names else ""
 
             # Create a separate chain row for each rate segment (like the old code)
@@ -1143,6 +1156,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     "calc200": seg_c200,
                     "type": "work",
                     "apartment_name": apt_name,
+                    "apartment_type_id": chain_apt_type,
                     "shift_name": shift_name_str,
                     "shift_type": shift_type_label,
                     "segments": [(start_str, end_str, seg_label)],
@@ -1244,6 +1258,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                         "calc100": 0, "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0,
                         "type": "standby",
                         "apartment_name": event.get("apartment_name", ""),
+                        "apartment_type_id": event.get("actual_apt_type"),  # Use actual type for visual indicator
                         "shift_name": "כוננות",
                         "shift_type": "כוננות",
                         "segments": [],
@@ -1263,6 +1278,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                         "calc100": 0, "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0,
                         "type": "vacation",
                         "apartment_name": "",
+                        "apartment_type_id": None,
                         "shift_name": "חופשה" if etype == "vacation" else "מחלה",
                         "shift_type": "חופשה" if etype == "vacation" else "מחלה",
                         "segments": [],
@@ -1274,7 +1290,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 last_end = end
                 last_etype = etype
             else:
-                current_chain_segments.append((start, end, event["label"], event["shift_id"], event.get("apartment_name", ""), event.get("actual_date")))
+                current_chain_segments.append((start, end, event["label"], event["shift_id"], event.get("apartment_name", ""), event.get("actual_date"), event.get("apartment_type_id")))
                 last_end = end
                 last_etype = etype
 
