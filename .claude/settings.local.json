@@ -42,7 +42,8 @@
       "Read(//f/DiyurClock/104/diyur003/**)",
       "Bash(netstat:*)",
       "Bash(psql:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(/c/Users/leahsc/AppData/Local/Python/pythoncore-3.14-64/python.exe -c:*)"
     ],
     "deny": [],
     "ask": []

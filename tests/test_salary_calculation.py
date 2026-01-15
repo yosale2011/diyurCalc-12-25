@@ -656,7 +656,7 @@ def run_real_data_tests():
     try:
         from core.database import get_pooled_connection, return_connection
         from core.logic import calculate_person_monthly_totals
-        from core.app_utils import get_daily_segments_data
+        from app_utils import get_daily_segments_data
     except ImportError as e:
         print(f"שגיאה בייבוא: {e}")
         print("וודא שאתה מריץ מתיקיית הפרויקט")
@@ -768,7 +768,7 @@ def compare_logic_and_display(conn, person_id: int, year: int, month: int):
     """השוואה בין חישוב logic.py לתצוגה app_utils.py"""
 
     from core.logic import calculate_person_monthly_totals
-    from core.app_utils import get_daily_segments_data
+    from app_utils import get_daily_segments_data
 
     print("\n" + "-"*50)
     print("השוואה בין logic.py ל-app_utils.py")

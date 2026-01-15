@@ -476,123 +476,29 @@ def calculate_person_monthly_totals(
 ) -> Dict:
     """
     חישוב מדויק של סיכומים חודשיים לעובד.
-    """
-    from utils.utils import month_range_ts, calculate_accruals
-    from core.history import get_minimum_wage_for_month, apply_historical_overrides
 
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    Uses the unified calculation logic from app_utils (get_daily_segments_data +
+    aggregate_daily_segments_to_monthly) which is the source of truth for wage calculation.
+    """
+    from core.history import get_minimum_wage_for_month
+    from core.database import PostgresConnection
+    from app_utils import get_daily_segments_data, aggregate_daily_segments_to_monthly
 
     # Get minimum wage for the specific month (historical)
     if minimum_wage is None:
         minimum_wage = get_minimum_wage_for_month(conn, year, month)
 
-    # שליפת פרטי העובד
-    cursor.execute("""
-        SELECT id, name, phone, email, is_active, start_date, is_married, type
-        FROM people WHERE id = %s
-    """, (person_id,))
-    person = cursor.fetchone()
-    if not person:
-        cursor.close()
-        return {}
+    # Wrap the raw psycopg2 connection in PostgresConnection for app_utils compatibility
+    conn_wrapper = PostgresConnection(conn, use_pool=False)
 
-    # שליפת דיווחים לחודש
-    start_ts, end_ts = month_range_ts(year, month)
-    cursor.execute("""
-        SELECT tr.*, st.name as shift_name,
-               a.apartment_type_id,
-               p.is_married,
-               st.rate as shift_rate,
-               st.is_minimum_wage as shift_is_minimum_wage,
-               st.wage_percentage as shift_wage_percentage
-        FROM time_reports tr
-        LEFT JOIN shift_types st ON st.id = tr.shift_type_id
-        LEFT JOIN apartments a ON tr.apartment_id = a.id
-        LEFT JOIN people p ON tr.person_id = p.id
-        WHERE tr.person_id = %s AND tr.date >= %s AND tr.date < %s
-        ORDER BY tr.date, tr.start_time
-    """, (person_id, start_ts, end_ts))
-    reports_raw = cursor.fetchall()
-
-    # החלת נתונים היסטוריים על הדיווחים
-    reports = apply_historical_overrides(conn, reports_raw, person_id, year, month)
-
-    # אתחול סיכומים
-    monthly_totals = _create_empty_monthly_totals()
-
-    if reports:
-        shift_ids = list({r["shift_type_id"] for r in reports if r["shift_type_id"]})
-        segments_by_shift = {}
-        if shift_ids:
-            placeholders = ",".join(["%s"] * len(shift_ids))
-            cursor.execute(f"""
-                SELECT id, shift_type_id, start_time, end_time, wage_percent, segment_type, order_index
-                FROM shift_time_segments
-                WHERE shift_type_id IN ({placeholders})
-                ORDER BY order_index
-            """, tuple(shift_ids))
-            for s in cursor.fetchall():
-                segments_by_shift.setdefault(s["shift_type_id"], []).append(dict(s))
-
-        shift_has_standby = {sid: any(s["segment_type"] == "standby" for s in segs)
-                             for sid, segs in segments_by_shift.items()}
-
-        daily_map = _build_daily_map(reports, segments_by_shift, year, month)
-
-        monthly_totals["standby"] = _count_standby_dates(reports, shift_has_standby)
-
-        def get_standby_rate_from_db(seg_id: int, apt_type: Optional[int], is_married: bool) -> float:
-            return get_standby_rate(conn, seg_id, apt_type, is_married, year, month)
-
-        totals, work_days_set, vacation_days_set = _process_daily_map(
-            daily_map, shabbat_cache, get_standby_rate_from_db, year, month
-        )
-
-        for key in ["calc100", "calc125", "calc150", "calc175", "calc200",
-                    "calc150_shabbat", "calc150_overtime", "calc150_shabbat_100",
-                    "calc150_shabbat_50", "total_hours", "standby_payment", "vacation_minutes"]:
-            monthly_totals[key] = totals[key]
-
-        monthly_totals["actual_work_days"] = len(work_days_set)
-        monthly_totals["vacation_days_taken"] = len(vacation_days_set)
-        monthly_totals["vacation_payment"] = (monthly_totals.get("vacation_minutes", 0) / 60) * minimum_wage
-
-        variable_rate_by_shift = _build_variable_rate_map(reports)
-        variable_rate_minutes, variable_rate_extra_payment = _calculate_variable_rate_payment(
-            daily_map, variable_rate_by_shift, minimum_wage
-        )
-        monthly_totals["calc_variable"] = variable_rate_minutes
-        monthly_totals["variable_rate_extra_payment"] = variable_rate_extra_payment
-
-    # שליפת רכיבי תשלום נוספים
-    month_start = datetime(year, month, 1, tzinfo=LOCAL_TZ)
-    month_end = datetime(year + 1, 1, 1, tzinfo=LOCAL_TZ) if month == 12 else datetime(year, month + 1, 1, tzinfo=LOCAL_TZ)
-
-    cursor.execute("""
-        SELECT (quantity * rate) as total_amount, component_type_id FROM payment_components
-        WHERE person_id = %s AND date >= %s AND date < %s
-    """, (person_id, month_start, month_end))
-    payment_comps = cursor.fetchall()
-
-    _process_payment_components(payment_comps, monthly_totals)
-
-    cursor.close()
-
-    # חישוב צבירות
-    accruals = calculate_accruals(
-        actual_work_days=monthly_totals["actual_work_days"],
-        start_date_ts=person["start_date"],
-        report_year=year,
-        report_month=month
+    # Use the unified calculation from app_utils (source of truth)
+    daily_segments, _ = get_daily_segments_data(
+        conn_wrapper, person_id, year, month, shabbat_cache, minimum_wage
     )
-    monthly_totals["sick_days_accrued"] = accruals["sick_days_accrued"]
-    monthly_totals["vacation_days_accrued"] = accruals["vacation_days_accrued"]
-    monthly_totals["vacation_details"] = accruals.get("vacation_details", _get_default_vacation_details())
 
-    # חישוב תשלום סופי
-    _calculate_final_payment(monthly_totals, minimum_wage)
-
-    monthly_totals["vacation"] = monthly_totals["vacation_minutes"]
+    monthly_totals = aggregate_daily_segments_to_monthly(
+        conn_wrapper, daily_segments, person_id, year, month, minimum_wage
+    )
 
     return monthly_totals
 
@@ -677,142 +583,28 @@ def _calculate_totals_from_data(
 
 
 def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], Dict]:
-    """Calculate monthly summary for all active people."""
-    from utils.utils import month_range_ts
-    from core.history import (get_person_status_for_month, get_apartment_type_for_month,
-                         get_all_shift_rates_for_month, get_minimum_wage_for_month)
+    """
+    Calculate monthly summary for all active people.
+
+    Uses the unified calculation logic from app_utils (get_daily_segments_data +
+    aggregate_daily_segments_to_monthly) which is the source of truth for wage calculation.
+    """
+    from core.history import get_minimum_wage_for_month
+    from core.database import PostgresConnection
+    from app_utils import get_daily_segments_data, aggregate_daily_segments_to_monthly
 
     payment_codes = get_payment_codes(conn)
 
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     cursor.execute("SELECT id, name, start_date, is_married, meirav_code FROM people WHERE is_active::integer = 1 ORDER BY name")
     people = cursor.fetchall()
-
-    start_ts, end_ts = month_range_ts(year, month)
-    cursor.execute("""
-        SELECT tr.*, st.name as shift_name,
-               st.rate AS shift_rate,
-               st.is_minimum_wage AS shift_is_minimum_wage,
-               st.wage_percentage AS shift_wage_percentage,
-               a.apartment_type_id,
-               p.is_married
-        FROM time_reports tr
-        LEFT JOIN shift_types st ON st.id = tr.shift_type_id
-        LEFT JOIN apartments a ON tr.apartment_id = a.id
-        LEFT JOIN people p ON tr.person_id = p.id
-        WHERE tr.date >= %s AND tr.date < %s
-        ORDER BY tr.person_id, tr.date, tr.start_time
-    """, (start_ts, end_ts))
-    all_reports_raw = cursor.fetchall()
-
-    # Load historical data for overrides
-    person_ids = {r["person_id"] for r in all_reports_raw if r["person_id"]}
-    person_status_cache = {}
-    for pid in person_ids:
-        hist = get_person_status_for_month(conn, pid, year, month)
-        if hist.get("is_married") is not None:
-            person_status_cache[pid] = hist
-
-    apartment_ids = {r["apartment_id"] for r in all_reports_raw if r["apartment_id"]}
-    apartment_type_cache = {}
-    for apt_id in apartment_ids:
-        hist_type = get_apartment_type_for_month(conn, apt_id, year, month)
-        if hist_type is not None:
-            apartment_type_cache[apt_id] = hist_type
-
-    shift_rates_cache = get_all_shift_rates_for_month(conn, year, month)
-
-    # Apply historical overrides
-    reports_by_person = {}
-    shift_type_ids = set()
-    for r in all_reports_raw:
-        r_dict = dict(r)
-        pid = r_dict.get("person_id")
-        apt_id = r_dict.get("apartment_id")
-        shift_type_id = r_dict.get("shift_type_id")
-
-        if pid and pid in person_status_cache:
-            hist_married = person_status_cache[pid].get("is_married")
-            if hist_married is not None:
-                r_dict["is_married"] = hist_married
-
-        rate_apt_type = r_dict.get("rate_apartment_type_id")
-        if rate_apt_type:
-            r_dict["apartment_type_id"] = rate_apt_type
-        elif apt_id and apt_id in apartment_type_cache:
-            r_dict["apartment_type_id"] = apartment_type_cache[apt_id]
-
-        if shift_type_id and shift_type_id in shift_rates_cache:
-            rate_info = shift_rates_cache[shift_type_id]
-            r_dict["shift_rate"] = rate_info.get("rate")
-            r_dict["shift_is_minimum_wage"] = rate_info.get("is_minimum_wage")
-            r_dict["shift_wage_percentage"] = rate_info.get("wage_percentage")
-
-        reports_by_person.setdefault(pid, []).append(r_dict)
-        if shift_type_id:
-            shift_type_ids.add(shift_type_id)
-
-    # Shift Segments
-    segments_by_shift = {}
-    shift_has_standby = {}
-    if shift_type_ids:
-        placeholders = ",".join(["%s"] * len(shift_type_ids))
-        cursor.execute(f"""
-            SELECT id, shift_type_id, start_time, end_time, wage_percent, segment_type, order_index
-            FROM shift_time_segments
-            WHERE shift_type_id IN ({placeholders})
-            ORDER BY order_index
-        """, tuple(shift_type_ids))
-        all_segs = cursor.fetchall()
-        for s in all_segs:
-            segments_by_shift.setdefault(s["shift_type_id"], []).append(dict(s))
-
-        for sid, segs in segments_by_shift.items():
-            shift_has_standby[sid] = any(s["segment_type"] == "standby" for s in segs)
-
-    # Payment Components
-    month_start = datetime(year, month, 1, tzinfo=LOCAL_TZ)
-    if month == 12:
-        month_end = datetime(year + 1, 1, 1, tzinfo=LOCAL_TZ)
-    else:
-        month_end = datetime(year, month + 1, 1, tzinfo=LOCAL_TZ)
-
-    cursor.execute("""
-        SELECT person_id, (quantity * rate) as total_amount, component_type_id
-        FROM payment_components
-        WHERE date >= %s AND date < %s
-    """, (month_start, month_end))
-    all_payment_comps = cursor.fetchall()
-    payment_comps_by_person = {}
-    for pc in all_payment_comps:
-        payment_comps_by_person.setdefault(pc["person_id"], []).append(pc)
-
-    # Standby Rates - first check historical, then fallback to current
-    standby_rates_cache_local = {}
-
-    cursor.execute("""
-        SELECT segment_id, apartment_type_id, marital_status, amount
-        FROM standby_rates_history
-        WHERE year = %s AND month = %s
-    """, (year, month))
-    historical_rates = cursor.fetchall()
-
-    if historical_rates:
-        for row in historical_rates:
-            priority = 10 if row["apartment_type_id"] is not None else 0
-            key = (row["segment_id"], row["apartment_type_id"], row["marital_status"], priority)
-            standby_rates_cache_local[key] = float(row["amount"]) / 100
-    else:
-        cursor.execute("SELECT * FROM standby_rates")
-        all_standby_rates = cursor.fetchall()
-        for row in all_standby_rates:
-            key = (row["segment_id"], row["apartment_type_id"], row["marital_status"], row["priority"])
-            standby_rates_cache_local[key] = float(row["amount"]) / 100
+    cursor.close()
 
     shabbat_cache = get_shabbat_times_cache(conn)
     minimum_wage = get_minimum_wage_for_month(conn, year, month)
 
-    cursor.close()
+    # Wrap the raw psycopg2 connection in PostgresConnection for app_utils compatibility
+    conn_wrapper = PostgresConnection(conn, use_pool=False)
 
     summary_data = []
     grand_totals = {code["internal_key"]: 0 for code in payment_codes}
@@ -824,17 +616,14 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
 
     for p in people:
         pid = p["id"]
-        monthly_totals = _calculate_totals_from_data(
-            person=p,
-            reports=reports_by_person.get(pid, []),
-            segments_by_shift=segments_by_shift,
-            shift_has_standby=shift_has_standby,
-            payment_comps=payment_comps_by_person.get(pid, []),
-            standby_rates_cache=standby_rates_cache_local,
-            shabbat_cache=shabbat_cache,
-            minimum_wage=minimum_wage,
-            year=year,
-            month=month
+
+        # Use the unified calculation from app_utils (source of truth)
+        daily_segments, _ = get_daily_segments_data(
+            conn_wrapper, pid, year, month, shabbat_cache, minimum_wage
+        )
+
+        monthly_totals = aggregate_daily_segments_to_monthly(
+            conn_wrapper, daily_segments, pid, year, month, minimum_wage
         )
 
         if monthly_totals.get("total_payment", 0) > 0 or monthly_totals.get("total_hours", 0) > 0:

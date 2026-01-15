@@ -655,6 +655,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     # יצירת סגמנטי עבודה לכל זמן לא מכוסה
                     segment_id = None
                     apartment_type_id = r.get("apartment_type_id")
+                    actual_apartment_type_id = r.get("actual_apartment_type_id") or apartment_type_id
                     is_married = r.get("is_married")
                     apartment_name = r.get("apartment_name", "")
 
@@ -1490,3 +1491,261 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
 
     return daily_segments, reports[0]["person_name"] if reports else ""
 
+
+def aggregate_daily_segments_to_monthly(
+    conn,
+    daily_segments: List[Dict],
+    person_id: int,
+    year: int,
+    month: int,
+    minimum_wage: float
+) -> Dict[str, Any]:
+    """
+    מאחד את כל הנתונים מ-daily_segments למילון monthly_totals.
+    זהו מקור האמת היחיד לחישוב שכר - מחליף את calculate_person_monthly_totals.
+
+    Args:
+        conn: חיבור לדאטבייס
+        daily_segments: רשימת ימים עם פירוט הרצפים (מ-get_daily_segments_data)
+        person_id: מזהה העובד
+        year: שנה
+        month: חודש
+        minimum_wage: שכר מינימום לחודש
+
+    Returns:
+        מילון monthly_totals עם כל השדות הנדרשים לכל הטאבים
+    """
+    from utils.utils import calculate_accruals
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    LOCAL_TZ = ZoneInfo("Asia/Jerusalem")
+
+    # אתחול סיכומים
+    monthly_totals = {
+        # שעות לפי אחוזים (בדקות)
+        "calc100": 0,
+        "calc125": 0,
+        "calc150": 0,
+        "calc150_shabbat": 0,
+        "calc150_shabbat_100": 0,
+        "calc150_shabbat_50": 0,
+        "calc150_overtime": 0,
+        "calc175": 0,
+        "calc200": 0,
+        "calc_variable": 0,
+
+        # תשלומים לפי אחוזים
+        "payment_calc100": 0.0,
+        "payment_calc125": 0.0,
+        "payment_calc150": 0.0,
+        "payment_calc150_overtime": 0.0,
+        "payment_calc150_shabbat": 0.0,
+        "payment_calc175": 0.0,
+        "payment_calc200": 0.0,
+        "payment_calc_variable": 0.0,
+
+        # סיכומים
+        "total_hours": 0,
+        "payment": 0.0,
+        "standby": 0,
+        "standby_payment": 0.0,
+
+        # חופשה ומחלה
+        "vacation_minutes": 0,
+        "vacation_payment": 0.0,
+        "vacation": 0,
+        "vacation_days_taken": 0,
+        "sick_days_accrued": 0.0,
+        "vacation_days_accrued": 0.0,
+
+        # נסיעות ותוספות
+        "travel": 0.0,
+        "extras": 0.0,
+
+        # ימי עבודה
+        "actual_work_days": 0,
+
+        # תעריף משתנה
+        "variable_rate_value": minimum_wage,
+        "variable_rate_extra_payment": 0.0,
+    }
+
+    # ספירת ימי עבודה וחופשה
+    work_days_set = set()
+    vacation_days_set = set()
+    standby_days_set = set()
+
+    # עיבוד כל הימים
+    for day in daily_segments:
+        day_date = day.get("date_obj")
+
+        # ספירת ימי עבודה
+        if day.get("has_work"):
+            work_days_set.add(day_date)
+
+        # צבירת סיכומים יומיים
+        monthly_totals["payment"] += day.get("payment", 0) or 0
+        monthly_totals["standby_payment"] += day.get("standby_payment", 0) or 0
+
+        # עיבוד רצפים (chains) לחישוב מדויק של שעות ותשלומים
+        for chain in day.get("chains", []):
+            chain_type = chain.get("type", "work")
+            effective_rate = chain.get("effective_rate", minimum_wage)
+            is_variable_rate = abs(effective_rate - minimum_wage) > 0.01
+
+            if chain_type == "work":
+                # שעות רגילות (100%)
+                c100 = chain.get("calc100", 0) or 0
+                if c100 > 0:
+                    if is_variable_rate:
+                        monthly_totals["calc_variable"] += c100
+                        monthly_totals["payment_calc_variable"] += (c100 / 60) * 1.0 * effective_rate
+                        monthly_totals["variable_rate_value"] = effective_rate
+                    else:
+                        monthly_totals["calc100"] += c100
+                        monthly_totals["payment_calc100"] += (c100 / 60) * 1.0 * effective_rate
+
+                # שעות נוספות 125%
+                c125 = chain.get("calc125", 0) or 0
+                if c125 > 0:
+                    if is_variable_rate:
+                        monthly_totals["calc_variable"] += c125
+                        monthly_totals["payment_calc_variable"] += (c125 / 60) * 1.25 * effective_rate
+                        monthly_totals["variable_rate_value"] = effective_rate
+                    else:
+                        monthly_totals["calc125"] += c125
+                        monthly_totals["payment_calc125"] += (c125 / 60) * 1.25 * effective_rate
+
+                # שעות נוספות 150% (כולל הפרדה בין חול לשבת)
+                c150 = chain.get("calc150", 0) or 0
+                c150_shabbat = chain.get("calc150_shabbat", 0) or 0
+                c150_overtime = chain.get("calc150_overtime", 0) or 0
+
+                if c150 > 0:
+                    if is_variable_rate:
+                        monthly_totals["calc_variable"] += c150
+                        monthly_totals["payment_calc_variable"] += (c150 / 60) * 1.5 * effective_rate
+                        monthly_totals["variable_rate_value"] = effective_rate
+                    else:
+                        monthly_totals["calc150"] += c150
+                        monthly_totals["payment_calc150"] += (c150 / 60) * 1.5 * effective_rate
+
+                        # הפרדה בין שבת לחול
+                        if c150_shabbat > 0:
+                            monthly_totals["calc150_shabbat"] += c150_shabbat
+                            monthly_totals["calc150_shabbat_100"] += c150_shabbat
+                            monthly_totals["calc150_shabbat_50"] += c150_shabbat
+                            monthly_totals["payment_calc150_shabbat"] += (c150_shabbat / 60) * 1.5 * effective_rate
+                        if c150_overtime > 0:
+                            monthly_totals["calc150_overtime"] += c150_overtime
+                            monthly_totals["payment_calc150_overtime"] += (c150_overtime / 60) * 1.5 * effective_rate
+
+                # שעות שבת 175%
+                c175 = chain.get("calc175", 0) or 0
+                if c175 > 0:
+                    if is_variable_rate:
+                        monthly_totals["calc_variable"] += c175
+                        monthly_totals["payment_calc_variable"] += (c175 / 60) * 1.75 * effective_rate
+                        monthly_totals["variable_rate_value"] = effective_rate
+                    else:
+                        monthly_totals["calc175"] += c175
+                        monthly_totals["payment_calc175"] += (c175 / 60) * 1.75 * effective_rate
+
+                # שעות שבת 200%
+                c200 = chain.get("calc200", 0) or 0
+                if c200 > 0:
+                    if is_variable_rate:
+                        monthly_totals["calc_variable"] += c200
+                        monthly_totals["payment_calc_variable"] += (c200 / 60) * 2.0 * effective_rate
+                        monthly_totals["variable_rate_value"] = effective_rate
+                    else:
+                        monthly_totals["calc200"] += c200
+                        monthly_totals["payment_calc200"] += (c200 / 60) * 2.0 * effective_rate
+
+            elif chain_type == "standby":
+                standby_days_set.add(day_date)
+
+            elif chain_type == "vacation":
+                vacation_days_set.add(day_date)
+                vacation_mins = chain.get("total_minutes", 0) or 0
+                monthly_totals["vacation_minutes"] += vacation_mins
+
+    # חישוב סך שעות עבודה (ללא כוננויות)
+    monthly_totals["total_hours"] = sum(
+        day.get("total_minutes_no_standby", 0) or 0
+        for day in daily_segments
+    )
+
+    # ספירת כוננויות
+    monthly_totals["standby"] = len(standby_days_set)
+
+    # ימי עבודה בפועל
+    monthly_totals["actual_work_days"] = len(work_days_set)
+
+    # ימי חופשה שנוצלו
+    monthly_totals["vacation_days_taken"] = len(vacation_days_set)
+
+    # תשלום חופשה
+    monthly_totals["vacation_payment"] = (monthly_totals["vacation_minutes"] / 60) * minimum_wage
+    monthly_totals["vacation"] = monthly_totals["vacation_minutes"]
+
+    # שליפת נסיעות ותוספות מהדאטבייס
+    month_start = datetime(year, month, 1, tzinfo=LOCAL_TZ)
+    if month == 12:
+        month_end = datetime(year + 1, 1, 1, tzinfo=LOCAL_TZ)
+    else:
+        month_end = datetime(year, month + 1, 1, tzinfo=LOCAL_TZ)
+
+    payment_comps = conn.execute("""
+        SELECT (quantity * rate) as total_amount, component_type_id
+        FROM payment_components
+        WHERE person_id = %s AND date >= %s AND date < %s
+    """, (person_id, month_start, month_end)).fetchall()
+
+    for pc in payment_comps:
+        amount = (pc["total_amount"] or 0) / 100
+        if pc["component_type_id"] == 2 or pc["component_type_id"] == 7:
+            monthly_totals["travel"] += amount
+        else:
+            monthly_totals["extras"] += amount
+
+    # שליפת פרטי העובד לחישוב צבירות
+    person = conn.execute(
+        "SELECT start_date FROM people WHERE id = %s", (person_id,)
+    ).fetchone()
+
+    # חישוב צבירות (מחלה וחופשה)
+    if person:
+        accruals = calculate_accruals(
+            actual_work_days=monthly_totals["actual_work_days"],
+            start_date_ts=person["start_date"],
+            report_year=year,
+            report_month=month
+        )
+        monthly_totals["sick_days_accrued"] = accruals.get("sick_days_accrued", 0)
+        monthly_totals["vacation_days_accrued"] = accruals.get("vacation_days_accrued", 0)
+        monthly_totals["vacation_details"] = accruals.get("vacation_details", {
+            "seniority": 1,
+            "annual_quota": 12,
+            "job_scope_pct": 100
+        })
+    else:
+        monthly_totals["vacation_details"] = {
+            "seniority": 1,
+            "annual_quota": 12,
+            "job_scope_pct": 100
+        }
+
+    # תשלום סופי כולל
+    monthly_totals["total_payment"] = (
+        monthly_totals["payment"] +
+        monthly_totals["standby_payment"] +
+        monthly_totals["travel"] +
+        monthly_totals["extras"]
+    )
+
+    # שמירת שכר אפקטיבי
+    monthly_totals["effective_hourly_rate"] = minimum_wage
+
+    return monthly_totals

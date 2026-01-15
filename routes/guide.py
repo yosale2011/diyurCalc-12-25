@@ -18,10 +18,9 @@ from core.logic import (
     get_shabbat_times_cache,
     get_payment_codes,
     get_available_months_for_person,
-    calculate_person_monthly_totals,
 )
 from core.history import get_minimum_wage_for_month
-from app_utils import get_daily_segments_data, _is_implicit_tagbur, FRIDAY_SHIFT_ID, SHABBAT_SHIFT_ID
+from app_utils import get_daily_segments_data, aggregate_daily_segments_to_monthly, _is_implicit_tagbur, FRIDAY_SHIFT_ID, SHABBAT_SHIFT_ID
 from utils.utils import human_date, format_currency, month_range_ts
 import psycopg2.extras
 
@@ -242,105 +241,13 @@ def guide_view(
             )
             logger.info(f"get_daily_segments_data took: {time.time() - segments_calc_start:.4f}s")
 
+            # חישוב monthly_totals ממקור אחד - daily_segments
+            # זה מחליף את calculate_person_monthly_totals והדריסות הידניות
             totals_start = time.time()
-            monthly_totals = calculate_person_monthly_totals(
-                conn.conn, person_id, selected_year, selected_month, shabbat_cache, MINIMUM_WAGE
+            monthly_totals = aggregate_daily_segments_to_monthly(
+                conn, daily_segments, person_id, selected_year, selected_month, MINIMUM_WAGE
             )
-            logger.info(f"calculate_person_monthly_totals took: {time.time() - totals_start:.4f}s")
-
-            # Recalculate payment from daily_segments to use custom shift rates
-            # (daily_segments uses get_effective_hourly_rate which handles custom shift rates)
-            total_payment_from_segments = sum(day.get("payment", 0) for day in daily_segments)
-            total_standby_from_segments = sum(day.get("standby_payment", 0) for day in daily_segments)
-
-            # Calculate payment breakdown by rate category from chains
-            # Sum minutes and payment for each category separately
-            # Also track variable rate hours (non-minimum wage) separately
-            minutes_by_rate = {"calc100": 0, "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0}
-            payment_by_rate = {"calc100": 0.0, "calc125": 0.0, "calc150": 0.0, "calc175": 0.0, "calc200": 0.0}
-
-            # Track variable rate hours separately (shifts with custom rate != minimum wage)
-            variable_rate_minutes = 0
-            variable_rate_payment = 0.0
-            variable_rate_value = None  # The actual rate used
-
-            for day in daily_segments:
-                for chain in day.get("chains", []):
-                    if chain.get("type") == "work":
-                        effective_rate = chain.get("effective_rate", MINIMUM_WAGE)
-                        is_variable_rate = abs(effective_rate - MINIMUM_WAGE) > 0.01  # Not minimum wage
-
-                        # Sum minutes and calculate payment for each rate category
-                        for rate_key in ["calc100", "calc125", "calc150", "calc175", "calc200"]:
-                            mins = chain.get(rate_key, 0)
-                            if mins > 0:
-                                multiplier = {"calc100": 1.0, "calc125": 1.25, "calc150": 1.5, "calc175": 1.75, "calc200": 2.0}[rate_key]
-                                payment = (mins / 60) * multiplier * effective_rate
-
-                                if is_variable_rate:
-                                    # Track separately for variable rate
-                                    variable_rate_minutes += mins
-                                    variable_rate_payment += payment
-                                    variable_rate_value = effective_rate
-                                else:
-                                    # Regular minimum wage hours
-                                    minutes_by_rate[rate_key] += mins
-                                    payment_by_rate[rate_key] += payment
-
-            # Store calculated payments in monthly_totals for template use
-            monthly_totals["payment_calc100"] = payment_by_rate["calc100"]
-            monthly_totals["payment_calc125"] = payment_by_rate["calc125"]
-            monthly_totals["payment_calc175"] = payment_by_rate["calc175"]
-            monthly_totals["payment_calc200"] = payment_by_rate["calc200"]
-
-            # For calc150, we need to recalculate payment including tagbur
-            # monthly_totals["calc150_overtime"] and ["calc150_shabbat"] include tagbur from logic.py
-            # So we calculate payment from these values directly
-            calc150_overtime_minutes = monthly_totals.get("calc150_overtime", 0)
-            calc150_shabbat_minutes = monthly_totals.get("calc150_shabbat", 0)
-            
-            # Calculate payment for overtime (150% at minimum wage) - includes tagbur
-            payment_calc150_overtime = (calc150_overtime_minutes / 60) * MINIMUM_WAGE * 1.5
-            
-            # Calculate payment for shabbat (150% at minimum wage) - includes tagbur
-            payment_calc150_shabbat = (calc150_shabbat_minutes / 60) * MINIMUM_WAGE * 1.5
-            
-            # Total calc150 payment = overtime + shabbat (both include tagbur)
-            monthly_totals["payment_calc150"] = payment_calc150_overtime + payment_calc150_shabbat
-            
-            # Store split payments for template
-            monthly_totals["payment_calc150_overtime"] = payment_calc150_overtime
-            monthly_totals["payment_calc150_shabbat"] = payment_calc150_shabbat
-
-            # Override the minutes values to exclude variable rate hours
-            # This prevents double-counting in the payment table
-            # BUT: Keep calc150, calc150_overtime, calc150_shabbat from monthly_totals (they include tagbur)
-            monthly_totals["calc100"] = minutes_by_rate["calc100"]
-            monthly_totals["calc125"] = minutes_by_rate["calc125"]
-            # Don't override calc150, calc150_overtime, calc150_shabbat - they include tagbur from monthly_totals
-            monthly_totals["calc175"] = minutes_by_rate["calc175"]
-            monthly_totals["calc200"] = minutes_by_rate["calc200"]
-
-            # Calculate total_hours from daily_segments (sum of all work minutes, excluding standby)
-            # This ensures the display matches the actual calculated segments
-            total_work_minutes = sum(
-                day["total_minutes_no_standby"] for day in daily_segments
-            )
-            monthly_totals["total_hours"] = total_work_minutes
-
-            # Store variable rate hours data
-            monthly_totals["calc_variable"] = variable_rate_minutes  # Minutes at variable rate
-            monthly_totals["payment_calc_variable"] = variable_rate_payment
-            monthly_totals["variable_rate_value"] = variable_rate_value or MINIMUM_WAGE
-
-            # Calculate effective hourly rate for regular hours (minimum wage)
-            effective_hourly_rate = MINIMUM_WAGE
-
-            # Override monthly_totals payment with correctly calculated values
-            # Note: Don't include travel/extras here - the template adds them where needed
-            monthly_totals["payment"] = total_payment_from_segments + total_standby_from_segments
-            monthly_totals["standby_payment"] = total_standby_from_segments
-            monthly_totals["effective_hourly_rate"] = effective_hourly_rate
+            logger.info(f"aggregate_daily_segments_to_monthly took: {time.time() - totals_start:.4f}s")
 
             # Get raw reports for the template
             start_dt, end_dt = month_range_ts(selected_year, selected_month)
