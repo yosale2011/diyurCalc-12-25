@@ -467,6 +467,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     norm_end = s_end
 
                 if display_date.year != year or display_date.month != month:
+                    logger.debug(f"Skipping report outside month: person_id={person_id}, date={display_date}, requested={year}-{month:02d}")
                     continue
 
                 day_key = display_date.strftime("%d/%m/%Y")
@@ -724,15 +725,15 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         vacation_segments.sort(key=lambda x: x[0])
         sick_segments.sort(key=lambda x: x[0])
         
-        # Dedup work
+        # Dedup work - include shift_id to not merge different shifts at same time
         deduped = []
         seen = set()
         for w in work_segments:
-            k = (w[0], w[1])  # (start, end)
+            k = (w[0], w[1], w[3])  # (start, end, shift_id)
             if k not in seen:
                 deduped.append(w)
                 seen.add(k)
-        work_segments = deduped  # Each is (start, end, label, sid, apt_name, actual_date)
+        work_segments = deduped  # Each is (start, end, label, sid, apt_name, actual_date, apt_type, actual_apt_type)
         
         # Dedup standby - now includes shift_type_id (7 elements)
         deduped_sb = []

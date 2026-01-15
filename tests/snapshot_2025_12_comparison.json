@@ -1,0 +1,22 @@
+{
+  "compared_at": "2026-01-15T07:44:33.826218",
+  "before_file": "F:\\DiyurClock\\104\\diyur003\\tests\\snapshot_2025_12_before.json",
+  "after_file": "F:\\DiyurClock\\104\\diyur003\\tests\\snapshot_2025_12_after.json",
+  "total_differences": 1,
+  "differences": [
+    {
+      "person_id": 211,
+      "name": "קרמר ריבה",
+      "type": "CHANGED",
+      "total_changes": [
+        {
+          "field": "total_standby",
+          "before": 618.0,
+          "after": 794.0,
+          "diff": 176.0
+        }
+      ],
+      "daily_changes": []
+    }
+  ]
+}

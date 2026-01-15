@@ -18,6 +18,56 @@ from core.history import (
 
 logger = logging.getLogger(__name__)
 
+# קבועים - IDs של סוגי משמרות
+FRIDAY_SHIFT_ID = 105         # משמרת שישי/ערב חג
+SHABBAT_SHIFT_ID = 106        # משמרת שבת/חג
+NIGHT_SHIFT_ID = 107          # משמרת לילה
+TAGBUR_FRIDAY_SHIFT_ID = 108  # משמרת תגבור שישי/ערב חג
+TAGBUR_SHABBAT_SHIFT_ID = 109 # משמרת תגבור שבת/חג
+
+# קבוצות IDs לבדיקות
+SHABBAT_SHIFT_IDS = {FRIDAY_SHIFT_ID, SHABBAT_SHIFT_ID}  # משמרות שישי/שבת (לא תגבור)
+TAGBUR_SHIFT_IDS = {TAGBUR_FRIDAY_SHIFT_ID, TAGBUR_SHABBAT_SHIFT_ID}  # משמרות תגבור
+
+# קבועים - סוגי דירות
+REGULAR_APT_TYPE = 1  # דירה רגילה
+THERAPEUTIC_APT_TYPE = 2  # דירה טיפולית
+
+
+def _is_tagbur_shift(shift_id: Optional[int]) -> bool:
+    """בודק האם משמרת היא תגבור (לפי ID)"""
+    return shift_id in TAGBUR_SHIFT_IDS
+
+
+def _is_night_shift(shift_id: Optional[int]) -> bool:
+    """בודק האם משמרת היא משמרת לילה (לפי ID)"""
+    return shift_id == NIGHT_SHIFT_ID
+
+
+def _is_shabbat_shift(shift_id: Optional[int]) -> bool:
+    """בודק האם משמרת היא שישי/שבת - לא תגבור (לפי ID)"""
+    return shift_id in SHABBAT_SHIFT_IDS
+
+
+def _is_implicit_tagbur(shift_id: Optional[int], actual_apt_type: Optional[int], rate_apt_type: Optional[int]) -> bool:
+    """
+    בודק האם משמרת היא תגבור לא מפורש.
+    תנאי: משמרת שישי (105) או שבת (106) בדירה טיפולית (2) עם תעריף דירה רגילה (1)
+
+    Args:
+        shift_id: מזהה המשמרת
+        actual_apt_type: סוג הדירה האמיתי (מטבלת apartments)
+        rate_apt_type: סוג הדירה לחישוב תעריף (rate_apartment_type_id או היסטורי)
+
+    Returns:
+        True אם זו משמרת תגבור לא מפורשת
+    """
+    is_friday_or_shabbat_shift = _is_shabbat_shift(shift_id)
+    is_therapeutic_apt = (actual_apt_type == THERAPEUTIC_APT_TYPE)
+    is_regular_rate = (rate_apt_type == REGULAR_APT_TYPE)
+    return is_friday_or_shabbat_shift and is_therapeutic_apt and is_regular_rate
+
+
 def get_effective_hourly_rate(report, minimum_wage: float) -> float:
     """
     Get the effective hourly rate for a shift.
@@ -35,8 +85,13 @@ def get_effective_hourly_rate(report, minimum_wage: float) -> float:
 
     # If shift has a custom rate, use it (regardless of is_minimum_wage flag)
     if shift_rate:
-        # shift_rate is stored in agorot (cents), convert to shekels
-        return float(shift_rate) / 100
+        rate = float(shift_rate) / 100  # shift_rate is stored in agorot
+        # Validate rate is positive
+        if rate > 0:
+            return rate
+        # Invalid rate - log warning and fall back to minimum wage
+        import logging
+        logging.warning(f"Invalid shift_rate {shift_rate} for shift, using minimum wage")
 
     return minimum_wage
 
@@ -214,11 +269,12 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
 
         # משמרות עם סגמנטים קבועים - משתמשים בסגמנטים המוגדרים ישירות (לא לפי שעות דיווח)
         # כולל: משמרות תגבור, יום חופשה, יום מחלה
-        is_fixed_segments_shift = "תגבור" in shift_name_str or is_vacation_report or is_sick_report
+        shift_type_id = r.get("shift_type_id")
+        is_fixed_segments_shift = _is_tagbur_shift(shift_type_id) or is_vacation_report or is_sick_report
 
         # משמרת לילה - סגמנטים דינמיים לפי זמן הכניסה בפועל
         # החוק: 2 שעות ראשונות עבודה, עד 06:30 כוננות, 06:30-08:00 עבודה
-        is_night_shift = (shift_name_str == "משמרת לילה")
+        is_night_shift = _is_night_shift(shift_type_id)
         if is_night_shift:
             # יצירת סגמנטים דינמיים לפי זמן הכניסה בפועל
             entry_time = rep_start_orig  # זמן הכניסה בדקות
@@ -362,6 +418,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     norm_end = s_end
 
                 if display_date.year != year or display_date.month != month:
+                    logger.debug(f"Skipping report outside month: person_id={person_id}, date={display_date}, requested={year}-{month:02d}")
                     continue
 
                 day_key = display_date.strftime("%d/%m/%Y")
@@ -700,11 +757,11 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         vacation_segments.sort(key=lambda x: x[0])
         sick_segments.sort(key=lambda x: x[0])
         
-        # Dedup work
+        # Dedup work - include shift_id to not merge different shifts at same time
         deduped = []
         seen = set()
         for w in work_segments:
-            k = (w[0], w[1])  # (start, end)
+            k = (w[0], w[1], w[3])  # (start, end, shift_id)
             if k not in seen:
                 deduped.append(w)
                 seen.add(k)
@@ -820,17 +877,17 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 effective_rate = shift_rates.get(sid, minimum_wage)
                 shift_name_str = shift_names_map.get(sid, "") if sid else ""
 
-                # Determine shift type label
+                # Determine shift type label (לפי ID, לא לפי שם)
                 shift_type_label = ""
-                if shift_name_str:
-                    if "תגבור" in shift_name_str:
-                        shift_type_label = "תגבור"
-                    elif "לילה" in shift_name_str:
-                        shift_type_label = "לילה"
-                    elif "שבת" in shift_name_str or "ערב שבת" in shift_name_str:
-                        shift_type_label = "שבת"
-                    else:
-                        shift_type_label = "חול"
+                if _is_tagbur_shift(sid):
+                    shift_type_label = "תגבור"
+                elif _is_implicit_tagbur(sid, actual_apt_type, apt_type):
+                    # משמרת שישי/שבת בדירה טיפולית עם תעריף דירה רגילה = תגבור
+                    shift_type_label = "תגבור"
+                elif _is_night_shift(sid):
+                    shift_type_label = "לילה"
+                elif _is_shabbat_shift(sid):
+                    shift_type_label = "שבת"
                 else:
                     shift_type_label = "חול"
 
@@ -1001,7 +1058,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         # Merge all events for processing
         all_events = []
         for s, e, l, sid, apt_name, actual_date, apt_type, actual_apt_type in work_segments:
-            all_events.append({"start": s, "end": e, "type": "work", "label": l, "shift_id": sid, "apartment_name": apt_name or "", "apartment_type_id": actual_apt_type, "actual_date": actual_date or day_date})
+            all_events.append({"start": s, "end": e, "type": "work", "label": l, "shift_id": sid, "apartment_name": apt_name or "", "apartment_type_id": actual_apt_type, "rate_apt_type": apt_type, "actual_date": actual_date or day_date})
         for s, e, seg_id, apt, married, actual_date, _shift_type_id, actual_apt_type in standby_segments:
             all_events.append({"start": s, "end": e, "type": "standby", "label": "כוננות", "seg_id": seg_id, "apt": apt, "actual_apt_type": actual_apt_type, "married": married, "actual_date": actual_date or day_date})
         for s, e, actual_date in vacation_segments:
@@ -1040,9 +1097,9 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         paid_standby_ids = set()  # Track paid standbys to avoid double payment
 
         def calculate_chain_pay(segments, minutes_offset=0):
-            # segments is list of (start, end, label, shift_id, apartment_name, actual_date, apt_type)
+            # segments is list of (start, end, label, shift_id, apartment_name, actual_date, apt_type, actual_apt_type, rate_apt_type)
             # Convert to format expected by _calculate_chain_wages: (start, end, shift_id)
-            chain_segs = [(s, e, sid) for s, e, l, sid, apt, adate, apt_type in segments]
+            chain_segs = [(s, e, sid) for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type in segments]
 
             # Use display day_date for Shabbat calculation
             # The display date is the actual calendar date when work was performed
@@ -1076,25 +1133,36 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             pay, c100, c125, c150, c175, c200, seg_detail, effective_rate = calculate_chain_pay(segments, minutes_offset)
 
             # Calculate total chain duration (including offset from previous day)
-            chain_duration = sum(e - s for s, e, l, sid, apt, adate, apt_type in segments)
+            chain_duration = sum(e - s for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type in segments)
             chain_total_minutes = minutes_offset + chain_duration
 
-            # Get apartment names and types from segments - segments is (start, end, label, sid, apt_name, actual_date, apt_type)
+            # Get apartment names and types from segments - segments is (start, end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type)
             chain_apartments = set()
             chain_shift_names = set()
             chain_apt_types = set()
-            for s, e, l, sid, apt, adate, apt_type in segments:
+            chain_shift_ids = set()
+            chain_actual_apt_types = set()
+            chain_rate_apt_types = set()
+            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type in segments:
                 if apt:
                     chain_apartments.add(apt)
                 if apt_type:
                     chain_apt_types.add(apt_type)
+                if actual_apt_type:
+                    chain_actual_apt_types.add(actual_apt_type)
+                if rate_apt_type:
+                    chain_rate_apt_types.add(rate_apt_type)
                 if sid:
+                    chain_shift_ids.add(sid)
                     shift_name = shift_names_map.get(sid, "")
                     if shift_name:
                         chain_shift_names.add(shift_name)
             apt_name = ", ".join(sorted(chain_apartments)) if chain_apartments else ""
             # Use the first (or only) apartment type for the chain
             chain_apt_type = list(chain_apt_types)[0] if chain_apt_types else None
+            chain_actual_apt = list(chain_actual_apt_types)[0] if chain_actual_apt_types else None
+            chain_rate_apt = list(chain_rate_apt_types)[0] if chain_rate_apt_types else None
+            chain_shift_id = list(chain_shift_ids)[0] if chain_shift_ids else None
             shift_name_str = ", ".join(sorted(chain_shift_names)) if chain_shift_names else ""
 
             # Create a separate chain row for each rate segment (like the old code)
@@ -1132,6 +1200,9 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 shift_type_label = ""
                 if shift_name_str:
                     if "תגבור" in shift_name_str:
+                        shift_type_label = "תגבור"
+                    elif _is_implicit_tagbur(chain_shift_id, chain_actual_apt, chain_rate_apt):
+                        # משמרת שישי/שבת בדירה טיפולית עם תעריף דירה רגילה = תגבור
                         shift_type_label = "תגבור"
                     elif "לילה" in shift_name_str:
                         shift_type_label = "לילה"
@@ -1290,7 +1361,8 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 last_end = end
                 last_etype = etype
             else:
-                current_chain_segments.append((start, end, event["label"], event["shift_id"], event.get("apartment_name", ""), event.get("actual_date"), event.get("apartment_type_id")))
+                # segments: (start, end, label, shift_id, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type)
+                current_chain_segments.append((start, end, event["label"], event["shift_id"], event.get("apartment_name", ""), event.get("actual_date"), event.get("apartment_type_id"), event.get("apartment_type_id"), event.get("rate_apt_type")))
                 last_end = end
                 last_etype = etype
 
