@@ -674,6 +674,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
     for day, entry in sorted(daily_map.items()):
         buckets = entry["buckets"]
         shift_names = sorted(entry["shifts"])
+        day_shift_ids = entry.get("day_shift_types", set())  # IDs של המשמרות ביום הזה
         is_fixed_segments = entry.get("is_fixed_segments", False)
 
         day_parts = day.split("/")
@@ -990,7 +991,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 })
 
             # עיבוד כוננויות רק למשמרות תגבור (לא לחופשה/מחלה)
-            is_tagbur = any("תגבור" in sn for sn in shift_names)
+            is_tagbur = bool(day_shift_ids & TAGBUR_SHIFT_IDS)  # בדיקה לפי ID
             if is_tagbur and standby_segments:
                 for sb_start, sb_end, seg_id, apt_type, married, actual_date, _shift_type_id, actual_apt_type in standby_segments:
                     duration = sb_end - sb_start
