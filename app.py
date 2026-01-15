@@ -375,14 +375,19 @@ def send_all_guides_email_api(request: Request, year: int, month: int):
 @app.post("/api/toggle-demo-mode")
 async def toggle_demo_mode(request: Request):
     """Toggle between demo and production database."""
-    # Verify password
+    # Verify password (from environment variable)
     try:
         body = await request.json()
         password = body.get("password", "")
     except:
         password = ""
 
-    if password != "8942798":
+    # Password must be configured in environment variable DEMO_MODE_PASSWORD
+    if not config.DEMO_MODE_PASSWORD:
+        logger.error("DEMO_MODE_PASSWORD not configured in environment")
+        return JSONResponse({"success": False, "error": "סיסמה לא מוגדרת במערכת"}, status_code=500)
+
+    if password != config.DEMO_MODE_PASSWORD:
         return JSONResponse({"success": False, "error": "סיסמה שגויה"}, status_code=401)
 
     current_demo = get_demo_mode_from_cookie(request)
@@ -414,6 +419,18 @@ def demo_mode_status(request: Request):
         "demo_mode": demo,
         "db_name": "פיתוח" if demo else "עבודה"
     }
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Handle application startup - ensure database has required codes."""
+    from core.logic import ensure_sick_payment_code
+    from core.database import get_conn
+    try:
+        with get_conn() as conn:
+            ensure_sick_payment_code(conn.conn)
+    except Exception as e:
+        logger.warning(f"Could not ensure sick payment code on startup: {e}")
 
 
 @app.on_event("shutdown")

@@ -41,6 +41,9 @@ class Config:
     ENABLE_CACHING: bool = os.getenv("ENABLE_CACHING", "True").lower() in ("true", "1", "yes")
     CACHE_TIMEOUT: int = int(os.getenv("CACHE_TIMEOUT", "300"))  # 5 minutes
 
+    # Security - Demo mode password
+    DEMO_MODE_PASSWORD: str = os.getenv("DEMO_MODE_PASSWORD", "")
+
     # Export configuration
     DEFAULT_EXPORT_ENCODING: str = os.getenv("DEFAULT_EXPORT_ENCODING", "utf-8")
 

@@ -52,7 +52,11 @@ def load_export_config_from_db(conn) -> Dict[str, Tuple[str, str, str]]:
             # חופשה (מדקות)
             'vacation': 'hours_100',
             'vacation_minutes': 'hours_100',
-            
+
+            # מחלה - תשלום מחושב עם אחוזים מדורגים
+            'sick_payment': 'money',
+            'sick_minutes': 'hours_100',
+
             # סכומים ישירים
             'travel': 'money',
             'extras': 'money',

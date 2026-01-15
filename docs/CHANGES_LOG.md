@@ -2,6 +2,43 @@
 
 ---
 
+## Code Review & Clean Code - 15/01/2026
+
+### 1. איחוד קבועים למקור אמת יחיד (DRY)
+*   **השינוי**: הסרת כפילות של קבועי Shift IDs ופונקציות helper מ-`app_utils.py` ו-`segments.py`.
+*   **הסבר**: קבועים כמו `FRIDAY_SHIFT_ID`, `SHABBAT_SHIFT_ID`, `TAGBUR_SHIFT_IDS` וכו' היו מוגדרים ב-3 מקומות שונים. עכשיו כולם מוגדרים רק ב-`core/constants.py` ומיובאים משם.
+*   **קבצים שהושפעו**:
+    - `app_utils.py` - הוחלפו הגדרות מקומיות בייבוא מ-`core/constants.py`
+    - `core/segments.py` - הוחלפו הגדרות מקומיות בייבוא מ-`core/constants.py`
+*   **תאימות לאחור**: נשמרו aliases עם קו תחתון (`_is_tagbur_shift` וכו') לתאימות עם קוד קיים.
+
+### 2. העברת סיסמה ל-Environment Variable (אבטחה)
+*   **השינוי**: הסרת סיסמה hardcoded מ-`app.py` והעברתה ל-environment variable.
+*   **הסבר**: סיסמת מעבר ל-Demo Mode הייתה כתובה בקוד. עכשיו היא נשלפת מ-`DEMO_MODE_PASSWORD` ב-.env.
+*   **קבצים שהושפעו**:
+    - `app.py:385-391` - שימוש ב-`config.DEMO_MODE_PASSWORD`
+    - `core/config.py:44-45` - הוספת הגדרת `DEMO_MODE_PASSWORD`
+    - `.env` - הוספת `DEMO_MODE_PASSWORD=8942798`
+
+### 3. הסרת Dead Code מ-logic.py
+*   **השינוי**: הסרת פונקציות וקבועים שלא בשימוש.
+*   **פרטים**:
+    - הוסרה `get_db_connection()` (legacy - הוחלף ע"י `get_conn()`)
+    - הוסרה `_calculate_totals_from_data()` (לא בשימוש - החישוב עובר דרך `app_utils`)
+    - הוסרו קבועים לא בשימוש: `WAGE_MULTIPLIER_*`, `MORNING_STANDBY_END_MINUTES`, `WORK_DAY_END_NORMALIZED`, `MINIMUM_ESCORT_MINUTES`, `NIGHT_STANDBY_WAGE_PERCENT`
+*   **קבצים שהושפעו**: `core/logic.py`
+
+### 4. ניקוי Imports לא בשימוש
+*   **השינוי**: הסרת `Optional` מ-typing imports ב-`logic.py`.
+*   **קבצים שהושפעו**: `core/logic.py:15`
+
+### סטטוס בדיקות
+*   58/60 בדיקות עברו בהצלחה
+*   2 בדיקות נכשלו (בעיות קיימות לא קשורות לשינויים אלה)
+*   2 בדיקות עם שגיאות fixture (לא קשורות לשינויים אלה)
+
+---
+
 ## גירסה 2.10 - 15/01/2026
 
 ### 1. תיקון באג חישוב גבולות שבת במשמרות שמסתיימות בחצות

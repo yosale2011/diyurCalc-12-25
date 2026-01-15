@@ -12,7 +12,7 @@ import logging
 import psycopg2
 import psycopg2.extras
 from datetime import datetime, timedelta, date
-from typing import List, Tuple, Dict, Optional, Any
+from typing import List, Tuple, Dict, Any
 from zoneinfo import ZoneInfo
 
 from convertdate import hebrew
@@ -83,52 +83,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # =============================================================================
-# Database connection (legacy - prefer core.database.get_conn())
+# Database utilities
 # =============================================================================
-import os
-from dotenv import load_dotenv
-
-load_dotenv()
-
-DB_CONNECTION_STRING = os.getenv("DATABASE_URL")
-if not DB_CONNECTION_STRING:
-    raise RuntimeError("DATABASE_URL environment variable is required. Please set it in .env file.")
-
-
-def get_db_connection():
-    """Create and return a PostgreSQL database connection.
-    Note: Prefer using core.database.get_conn() for connection pooling."""
-    try:
-        conn = psycopg2.connect(DB_CONNECTION_STRING)
-        return conn
-    except psycopg2.OperationalError as e:
-        error_msg = str(e)
-        if "could not translate host name" in error_msg or "Name or service not known" in error_msg:
-            logger.error(
-                f"Database DNS resolution failed. Hostname cannot be resolved.\n"
-                f"Error: {error_msg}\n"
-                f"Please check:\n"
-                f"1. Your internet connection\n"
-                f"2. DNS settings\n"
-                f"3. VPN/firewall configuration\n"
-                f"4. Database hostname in DATABASE_URL is correct"
-            )
-        elif "connection refused" in error_msg.lower():
-            logger.error(
-                f"Database connection refused.\n"
-                f"Error: {error_msg}\n"
-                f"Please check:\n"
-                f"1. Database server is running\n"
-                f"2. Port number is correct\n"
-                f"3. Firewall allows connections"
-            )
-        else:
-            logger.error(f"Database connection error: {error_msg}")
-        raise
-    except Exception as e:
-        logger.error(f"Unexpected database connection error: {e}")
-        raise
-
 
 def dict_cursor(conn):
     """Create a cursor that returns rows as dicts."""
@@ -136,29 +92,10 @@ def dict_cursor(conn):
 
 
 # =============================================================================
-# Local Constants (kept for compatibility)
+# Local Constants (referenced from config)
 # =============================================================================
-
-# Wage/Accrual constants
 STANDARD_WORK_DAYS_PER_MONTH = config.STANDARD_WORK_DAYS_PER_MONTH
 MAX_SICK_DAYS_PER_MONTH = config.MAX_SICK_DAYS_PER_MONTH
-
-# Wage multipliers (overtime percentages)
-WAGE_MULTIPLIER_100 = 1.0
-WAGE_MULTIPLIER_125 = 1.25
-WAGE_MULTIPLIER_150 = 1.5
-WAGE_MULTIPLIER_175 = 1.75
-WAGE_MULTIPLIER_200 = 2.0
-
-# Additional time constants for app_utils compatibility
-MORNING_STANDBY_END_MINUTES = 390   # 06:30
-WORK_DAY_END_NORMALIZED = 1920      # 08:00 next day (480 + 1440)
-
-# Medical escort constants
-MINIMUM_ESCORT_MINUTES = 60         # שעה מינימלית לליווי רפואי
-
-# Night shift standby wage percent
-NIGHT_STANDBY_WAGE_PERCENT = 24     # אחוז שכר כוננות בלילה
 
 
 # =============================================================================
@@ -305,6 +242,34 @@ def get_payment_codes(conn):
     except Exception as e:
         logger.error(f"Error fetching payment codes: {e}")
         return []
+
+
+def ensure_sick_payment_code(conn):
+    """
+    מוודא שקוד מירב 319 לתשלום מחלה קיים בטבלת payment_codes.
+    אם לא קיים, מוסיף אותו.
+    """
+    try:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
+        # בדיקה אם הקוד כבר קיים
+        cursor.execute("""
+            SELECT id FROM payment_codes WHERE internal_key = 'sick_payment'
+        """)
+        existing = cursor.fetchone()
+
+        if not existing:
+            # הוספת קוד מחלה חדש
+            cursor.execute("""
+                INSERT INTO payment_codes (internal_key, display_name, merav_code, display_order)
+                VALUES ('sick_payment', 'תשלום מחלה', '319', 175)
+            """)
+            conn.commit()
+            logger.info("Added sick_payment code (319) to payment_codes table")
+
+        cursor.close()
+    except Exception as e:
+        logger.error(f"Error ensuring sick payment code: {e}")
 
 
 # =============================================================================
@@ -503,83 +468,9 @@ def calculate_person_monthly_totals(
     return monthly_totals
 
 
-def _calculate_totals_from_data(
-    person,
-    reports,
-    segments_by_shift,
-    shift_has_standby,
-    payment_comps,
-    standby_rates_cache,
-    shabbat_cache,
-    minimum_wage,
-    year,
-    month
-) -> Dict:
-    """
-    Helper for calculating totals from pre-fetched data.
-    Uses shared helper functions to avoid code duplication.
-    """
-    from utils.utils import calculate_accruals
-
-    monthly_totals = _create_empty_monthly_totals()
-
-    if reports:
-        monthly_totals["standby"] = _count_standby_dates(reports, shift_has_standby)
-
-        daily_map = _build_daily_map(reports, segments_by_shift, year, month)
-
-        def get_standby_rate_from_cache(seg_id: int, apt_type: Optional[int], is_married: bool) -> float:
-            marital_status = "married" if is_married else "single"
-            rate = DEFAULT_STANDBY_RATE
-
-            if apt_type is not None:
-                val = standby_rates_cache.get((seg_id, apt_type, marital_status, 10))
-                if val is not None:
-                    return val
-
-            val = standby_rates_cache.get((seg_id, None, marital_status, 0))
-            if val is not None:
-                return val
-
-            return rate
-
-        totals, work_days_set, vacation_days_set = _process_daily_map(
-            daily_map, shabbat_cache, get_standby_rate_from_cache, year, month
-        )
-
-        for key in ["calc100", "calc125", "calc150", "calc175", "calc200",
-                    "calc150_shabbat", "calc150_overtime", "calc150_shabbat_100",
-                    "calc150_shabbat_50", "total_hours", "standby_payment", "vacation_minutes"]:
-            monthly_totals[key] = totals[key]
-
-        variable_rate_by_shift = _build_variable_rate_map(reports)
-        variable_rate_minutes, variable_rate_extra_payment = _calculate_variable_rate_payment(
-            daily_map, variable_rate_by_shift, minimum_wage
-        )
-        monthly_totals["calc_variable"] = variable_rate_minutes
-        monthly_totals["variable_rate_extra_payment"] = variable_rate_extra_payment
-
-        monthly_totals["actual_work_days"] = len(work_days_set)
-        monthly_totals["vacation_days_taken"] = len(vacation_days_set)
-        monthly_totals["vacation_payment"] = (monthly_totals.get("vacation_minutes", 0) / 60) * minimum_wage
-
-    _process_payment_components(payment_comps, monthly_totals)
-
-    accruals = calculate_accruals(
-        actual_work_days=monthly_totals["actual_work_days"],
-        start_date_ts=person["start_date"],
-        report_year=year,
-        report_month=month
-    )
-    monthly_totals["sick_days_accrued"] = accruals["sick_days_accrued"]
-    monthly_totals["vacation_days_accrued"] = accruals["vacation_days_accrued"]
-    monthly_totals["vacation_details"] = accruals.get("vacation_details", _get_default_vacation_details())
-
-    _calculate_final_payment(monthly_totals, minimum_wage)
-
-    monthly_totals["vacation"] = monthly_totals["vacation_minutes"]
-
-    return monthly_totals
+# NOTE: _calculate_totals_from_data was removed as dead code.
+# The calculation is now done exclusively through app_utils.get_daily_segments_data
+# and app_utils.aggregate_daily_segments_to_monthly (source of truth).
 
 
 def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], Dict]:

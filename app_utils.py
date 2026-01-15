@@ -16,59 +16,42 @@ from core.history import (
     get_all_shift_rates_for_month
 )
 
+# =============================================================================
+# Import constants from single source of truth (core/constants.py)
+# =============================================================================
+from core.constants import (
+    # Shift IDs
+    FRIDAY_SHIFT_ID,
+    SHABBAT_SHIFT_ID,
+    NIGHT_SHIFT_ID,
+    TAGBUR_FRIDAY_SHIFT_ID,
+    TAGBUR_SHABBAT_SHIFT_ID,
+    # Shift ID groups
+    SHABBAT_SHIFT_IDS,
+    TAGBUR_SHIFT_IDS,
+    # Apartment types
+    REGULAR_APT_TYPE,
+    THERAPEUTIC_APT_TYPE,
+    # Standby constants
+    MAX_CANCELLED_STANDBY_DEDUCTION,
+    # Helper functions
+    is_tagbur_shift,
+    is_night_shift,
+    is_shabbat_shift,
+    is_implicit_tagbur,
+)
+
 logger = logging.getLogger(__name__)
 
-# קבועים - IDs של סוגי משמרות
-FRIDAY_SHIFT_ID = 105         # משמרת שישי/ערב חג
-SHABBAT_SHIFT_ID = 106        # משמרת שבת/חג
-NIGHT_SHIFT_ID = 107          # משמרת לילה
-TAGBUR_FRIDAY_SHIFT_ID = 108  # משמרת תגבור שישי/ערב חג
-TAGBUR_SHABBAT_SHIFT_ID = 109 # משמרת תגבור שבת/חג
-
-# קבוצות IDs לבדיקות
-SHABBAT_SHIFT_IDS = {FRIDAY_SHIFT_ID, SHABBAT_SHIFT_ID}  # משמרות שישי/שבת (לא תגבור)
-TAGBUR_SHIFT_IDS = {TAGBUR_FRIDAY_SHIFT_ID, TAGBUR_SHABBAT_SHIFT_ID}  # משמרות תגבור
-
-# קבועים - סוגי דירות
-REGULAR_APT_TYPE = 1  # דירה רגילה
-THERAPEUTIC_APT_TYPE = 2  # דירה טיפולית
-
-# תקרת ניכוי כוננות שמתבטלת
-MAX_CANCELLED_STANDBY_DEDUCTION = 70.0  # ש"ח
-
-
-def _is_tagbur_shift(shift_id: Optional[int]) -> bool:
-    """בודק האם משמרת היא תגבור (לפי ID)"""
-    return shift_id in TAGBUR_SHIFT_IDS
-
-
-def _is_night_shift(shift_id: Optional[int]) -> bool:
-    """בודק האם משמרת היא משמרת לילה (לפי ID)"""
-    return shift_id == NIGHT_SHIFT_ID
-
-
-def _is_shabbat_shift(shift_id: Optional[int]) -> bool:
-    """בודק האם משמרת היא שישי/שבת - לא תגבור (לפי ID)"""
-    return shift_id in SHABBAT_SHIFT_IDS
-
-
-def _is_implicit_tagbur(shift_id: Optional[int], actual_apt_type: Optional[int], rate_apt_type: Optional[int]) -> bool:
-    """
-    בודק האם משמרת היא תגבור לא מפורש.
-    תנאי: משמרת שישי (105) או שבת (106) בדירה טיפולית (2) עם תעריף דירה רגילה (1)
-
-    Args:
-        shift_id: מזהה המשמרת
-        actual_apt_type: סוג הדירה האמיתי (מטבלת apartments)
-        rate_apt_type: סוג הדירה לחישוב תעריף (rate_apartment_type_id או היסטורי)
-
-    Returns:
-        True אם זו משמרת תגבור לא מפורשת
-    """
-    is_friday_or_shabbat_shift = _is_shabbat_shift(shift_id)
-    is_therapeutic_apt = (actual_apt_type == THERAPEUTIC_APT_TYPE)
-    is_regular_rate = (rate_apt_type == REGULAR_APT_TYPE)
-    return is_friday_or_shabbat_shift and is_therapeutic_apt and is_regular_rate
+# =============================================================================
+# Backward compatibility aliases (with underscore prefix)
+# These are kept for backward compatibility with routes/guide.py
+# TODO: Update routes/guide.py to import directly from core.constants
+# =============================================================================
+_is_tagbur_shift = is_tagbur_shift
+_is_night_shift = is_night_shift
+_is_shabbat_shift = is_shabbat_shift
+_is_implicit_tagbur = is_implicit_tagbur
 
 
 def get_effective_hourly_rate(report, minimum_wage: float) -> float:
@@ -97,6 +80,80 @@ def get_effective_hourly_rate(report, minimum_wage: float) -> float:
         logging.warning(f"Invalid shift_rate {shift_rate} for shift, using minimum wage")
 
     return minimum_wage
+
+
+def _identify_sick_day_sequences(reports: List[Dict]) -> Dict[date, int]:
+    """
+    זיהוי רצפי ימי מחלה וקביעת מספר היום ברצף לכל תאריך.
+
+    לפי חוק דמי מחלה:
+    - יום ראשון: 0% תשלום
+    - ימים 2-3: 50% תשלום
+    - מיום 4 והלאה: 100% תשלום
+
+    תאריכים רצופים (כולל ימי מנוחה) נחשבים כרצף אחד.
+    הפסקה של יותר מיום אחד מתחילה רצף חדש.
+
+    Args:
+        reports: רשימת דיווחים מהדאטבייס
+
+    Returns:
+        מילון {תאריך: מספר_יום_מחלה} (1, 2, 3, 4...)
+    """
+    # איסוף כל התאריכים שיש בהם דיווח מחלה
+    sick_dates = set()
+    for r in reports:
+        shift_name = r.get("shift_name") or ""
+        if "מחלה" in shift_name:
+            r_date = r.get("date")
+            if r_date:
+                if isinstance(r_date, datetime):
+                    sick_dates.add(r_date.date())
+                elif isinstance(r_date, date):
+                    sick_dates.add(r_date)
+
+    if not sick_dates:
+        return {}
+
+    # מיון לפי תאריך
+    sorted_dates = sorted(sick_dates)
+
+    # בניית מילון עם מספר יום לכל תאריך
+    sick_day_numbers = {}
+    day_in_sequence = 1
+
+    for i, d in enumerate(sorted_dates):
+        if i == 0:
+            sick_day_numbers[d] = 1
+        else:
+            prev_date = sorted_dates[i - 1]
+            # אם ההפרש הוא יום אחד בדיוק - המשך רצף
+            if (d - prev_date).days == 1:
+                day_in_sequence += 1
+            else:
+                # הפסקה - התחלת רצף חדש
+                day_in_sequence = 1
+            sick_day_numbers[d] = day_in_sequence
+
+    return sick_day_numbers
+
+
+def get_sick_payment_rate(sick_day_number: int) -> float:
+    """
+    קביעת אחוז התשלום לפי מספר יום המחלה ברצף.
+
+    Args:
+        sick_day_number: מספר היום ברצף (1, 2, 3, 4...)
+
+    Returns:
+        אחוז התשלום (0.0, 0.5, או 1.0)
+    """
+    if sick_day_number == 1:
+        return 0.0  # יום ראשון - 0%
+    elif sick_day_number <= 3:
+        return 0.5  # ימים 2-3 - 50%
+    else:
+        return 1.0  # מיום 4 והלאה - 100%
 
 
 def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat_cache: Dict, minimum_wage: float):
@@ -181,8 +238,11 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             r_dict["shift_is_minimum_wage"] = rate_info.get("is_minimum_wage")
             
         processed_reports.append(r_dict)
-    
+
     reports = processed_reports
+
+    # זיהוי רצפי ימי מחלה לחישוב אחוזי תשלום מדורגים
+    sick_day_sequence = _identify_sick_day_sequences(reports)
 
     # Fetch segments
     shift_ids = {r["shift_type_id"] for r in reports if r["shift_type_id"]}
@@ -992,10 +1052,17 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     "effective_rate": minimum_wage,
                 })
 
-            # עיבוד סגמנטי מחלה
+            # עיבוד סגמנטי מחלה - עם אחוזי תשלום מדורגים לפי חוק דמי מחלה
             for s, e, actual_date in sick_segments:
                 duration = e - s
-                pay = (duration / 60) * minimum_wage  # מחלה = 100% שכר מינימום
+
+                # קביעת מספר יום המחלה ברצף ואחוז התשלום
+                sick_date = actual_date.date() if isinstance(actual_date, datetime) else actual_date
+                sick_day_num = sick_day_sequence.get(sick_date, 1)
+                sick_rate = get_sick_payment_rate(sick_day_num)
+
+                # חישוב תשלום לפי האחוז המדורג
+                pay = (duration / 60) * minimum_wage * sick_rate
                 d_calc100 += duration
                 d_payment += pay
 
@@ -1017,6 +1084,8 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     "break_reason": "",
                     "from_prev_day": False,
                     "effective_rate": minimum_wage,
+                    "sick_day_number": sick_day_num,
+                    "sick_rate_percent": int(sick_rate * 100),
                 })
 
             # עיבוד כוננויות רק למשמרות תגבור (לא לחופשה/מחלה)
@@ -1556,6 +1625,9 @@ def aggregate_daily_segments_to_monthly(
         "vacation_payment": 0.0,
         "vacation": 0,
         "vacation_days_taken": 0,
+        "sick_minutes": 0,
+        "sick_payment": 0.0,
+        "sick_days_taken": 0,
         "sick_days_accrued": 0.0,
         "vacation_days_accrued": 0.0,
 
@@ -1571,9 +1643,10 @@ def aggregate_daily_segments_to_monthly(
         "variable_rate_extra_payment": 0.0,
     }
 
-    # ספירת ימי עבודה וחופשה
+    # ספירת ימי עבודה, חופשה ומחלה
     work_days_set = set()
     vacation_days_set = set()
+    sick_days_set = set()
     standby_days_set = set()
 
     # עיבוד כל הימים
@@ -1671,6 +1744,13 @@ def aggregate_daily_segments_to_monthly(
                 vacation_mins = chain.get("total_minutes", 0) or 0
                 monthly_totals["vacation_minutes"] += vacation_mins
 
+            elif chain_type == "sick":
+                sick_days_set.add(day_date)
+                sick_mins = chain.get("total_minutes", 0) or 0
+                sick_pay = chain.get("payment", 0) or 0
+                monthly_totals["sick_minutes"] += sick_mins
+                monthly_totals["sick_payment"] += sick_pay
+
     # חישוב סך שעות עבודה (ללא כוננויות)
     monthly_totals["total_hours"] = sum(
         day.get("total_minutes_no_standby", 0) or 0
@@ -1689,6 +1769,9 @@ def aggregate_daily_segments_to_monthly(
     # תשלום חופשה
     monthly_totals["vacation_payment"] = (monthly_totals["vacation_minutes"] / 60) * minimum_wage
     monthly_totals["vacation"] = monthly_totals["vacation_minutes"]
+
+    # ימי מחלה שנוצלו (התשלום כבר חושב בלולאה עם האחוזים המדורגים)
+    monthly_totals["sick_days_taken"] = len(sick_days_set)
 
     # שליפת נסיעות ותוספות מהדאטבייס
     month_start = datetime(year, month, 1, tzinfo=LOCAL_TZ)

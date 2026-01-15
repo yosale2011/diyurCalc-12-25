@@ -18,30 +18,23 @@ from utils.utils import overlap_minutes
 logger = logging.getLogger(__name__)
 
 # =============================================================================
-# Constants
+# Import constants from single source of truth (core/constants.py)
+# These are also re-exported for backward compatibility with code that imports from segments.py
 # =============================================================================
-
-# Break threshold (in minutes) - breaks longer than this split work chains
-BREAK_THRESHOLD_MINUTES = 60
-
-# קבועים - IDs של סוגי משמרות
-FRIDAY_SHIFT_ID = 105         # משמרת שישי/ערב חג
-SHABBAT_SHIFT_ID = 106        # משמרת שבת/חג
-NIGHT_SHIFT_ID = 107          # משמרת לילה
-TAGBUR_FRIDAY_SHIFT_ID = 108  # משמרת תגבור שישי/ערב חג
-TAGBUR_SHABBAT_SHIFT_ID = 109 # משמרת תגבור שבת/חג
-
-# קבוצות IDs לבדיקות
-TAGBUR_SHIFT_IDS = {TAGBUR_FRIDAY_SHIFT_ID, TAGBUR_SHABBAT_SHIFT_ID}  # משמרות תגבור
-
-# Night shift constants
-NIGHT_SHIFT_WORK_FIRST_MINUTES = 2 * MINUTES_PER_HOUR  # 120 = first 2 hours are work
-NIGHT_SHIFT_STANDBY_END = 390  # 06:30 in minutes
-NIGHT_SHIFT_MORNING_END = WORK_DAY_START_MINUTES  # 480 = 08:00
-NOON_MINUTES = 12 * MINUTES_PER_HOUR  # 720 = 12:00
-
-# Medical escort shift
-MEDICAL_ESCORT_SHIFT_ID = 148
+from core.constants import (
+    # Shift IDs
+    NIGHT_SHIFT_ID,
+    MEDICAL_ESCORT_SHIFT_ID,
+    # Shift ID groups
+    TAGBUR_SHIFT_IDS,
+    # Night shift constants
+    NIGHT_SHIFT_WORK_FIRST_MINUTES,
+    NIGHT_SHIFT_STANDBY_END,
+    NIGHT_SHIFT_MORNING_END,
+    NOON_MINUTES,
+    # Break threshold (re-exported for backward compatibility)
+    BREAK_THRESHOLD_MINUTES,
+)
 
 
 # =============================================================================
