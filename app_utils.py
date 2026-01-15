@@ -33,6 +33,9 @@ TAGBUR_SHIFT_IDS = {TAGBUR_FRIDAY_SHIFT_ID, TAGBUR_SHABBAT_SHIFT_ID}  # משמר
 REGULAR_APT_TYPE = 1  # דירה רגילה
 THERAPEUTIC_APT_TYPE = 2  # דירה טיפולית
 
+# תקרת ניכוי כוננות שמתבטלת
+MAX_CANCELLED_STANDBY_DEDUCTION = 70.0  # ש"ח
+
 
 def _is_tagbur_shift(shift_id: Optional[int]) -> bool:
     """בודק האם משמרת היא תגבור (לפי ID)"""
@@ -228,9 +231,25 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
     daily_map = {}
     
     for r in reports:
-        if not r["start_time"] or not r["end_time"] or not r["shift_type_id"]:
+        if not r["shift_type_id"]:
             continue
-        
+
+        # בדיקה אם יש שעות בדיווח
+        has_times = r["start_time"] and r["end_time"]
+
+        # אם אין שעות - בודקים אם יש סגמנטים מוגדרים למשמרת (למשל יום מחלה/חופשה)
+        if not has_times:
+            seg_list_check = segments_by_shift.get(r["shift_type_id"], [])
+            if seg_list_check:
+                # יש סגמנטים - נשתמש בשעות מהסגמנט הראשון
+                first_seg = seg_list_check[0]
+                r = dict(r)  # יצירת עותק כדי לא לשנות את המקור
+                r["start_time"] = first_seg["start_time"]
+                r["end_time"] = first_seg["end_time"]
+            else:
+                # אין סגמנטים ואין שעות - דלג
+                continue
+
         # Split shifts across midnight
         rep_start_orig, rep_end_orig = span_minutes(r["start_time"], r["end_time"])
         r_date = to_local_date(r["date"])
@@ -825,12 +844,19 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             ratio = total_overlap / duration if duration > 0 else 0
 
             if ratio >= STANDBY_CANCEL_OVERLAP_THRESHOLD:
-                # Cancel standby completely if >70% overlap
+                # כוננות מתבטלת - מורידים עד 70₪, משלמים את ההפרש
+                standby_rate = get_standby_rate(conn, seg_id or 0, apt_type, bool(married), year, month) if seg_id else DEFAULT_STANDBY_RATE
+                partial_pay = max(0, standby_rate - MAX_CANCELLED_STANDBY_DEDUCTION)
+
                 if sb_start % MINUTES_PER_DAY > 0:
+                    reason = f"חפיפה ({int(ratio*100)}%)"
+                    if partial_pay > 0:
+                        reason += f" - שולם {partial_pay:.0f}₪"
                     cancelled_standbys.append({
                         "start": sb_start % MINUTES_PER_DAY,
                         "end": sb_end % MINUTES_PER_DAY,
-                        "reason": f"חפיפה ({int(ratio*100)}%)"
+                        "reason": reason,
+                        "partial_pay": partial_pay
                     })
             else:
                 # Trim: subtract work segments from standby
@@ -984,6 +1010,8 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0,
                     "type": "sick",
                     "apartment_name": "",
+                    "shift_name": "מחלה",
+                    "shift_type": "מחלה",
                     "segments": [(start_str, end_str, "מחלה")],
                     "break_reason": "",
                     "from_prev_day": False,
@@ -1037,6 +1065,10 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             if bonus_mins > 0:
                 d_calc100 += bonus_mins
                 d_payment += (bonus_mins / 60) * minimum_wage
+
+            # Add partial payments from cancelled standbys (when standby > 70₪)
+            cancelled_partial_pay = sum(c.get("partial_pay", 0) for c in cancelled_standbys)
+            d_standby_pay += cancelled_partial_pay
 
             daily_segments.append({
                 "day": day,
@@ -1290,8 +1322,20 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     should_break = True
                     break_reason = f"הפסקה ({start - last_end} דקות)"
 
+            # בדיקה נוספת: האם התעריף משתנה?
+            # אם הסגמנט החדש הוא עם תעריף שונה מהסגמנטים הקודמים ב-chain, צריך לסגור את ה-chain
+            if not is_special and current_chain_segments and not should_break:
+                new_shift_id = event.get("shift_id")
+                new_rate = shift_rates.get(new_shift_id, minimum_wage)
+                # בדיקת התעריף של ה-chain הנוכחי
+                current_shift_id = current_chain_segments[0][3] if current_chain_segments else None
+                current_rate = shift_rates.get(current_shift_id, minimum_wage)
+                if new_rate != current_rate:
+                    should_break = True
+                    break_reason = "שינוי תעריף"
+
             if should_break:
-                chain_offset = current_offset if first_chain_of_day else 0
+                chain_offset = current_offset
                 pay, c100, c125, c150, c175, c200, chain_total, ends_at_0800 = close_chain_and_record(
                     current_chain_segments, break_reason, chain_offset)
                 d_payment += pay
@@ -1300,6 +1344,13 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 # Track last chain info for potential carryover to next day
                 last_chain_total = chain_total
                 last_chain_ended_at_0800 = ends_at_0800
+
+                # אם נשבר בגלל שינוי תעריף, צריך להעביר את ה-minutes offset ל-chain הבא
+                # כי ה-overtime נמשך על פני כל יום העבודה
+                if break_reason == "שינוי תעריף":
+                    current_offset = chain_total  # ה-offset לchain הבא כולל את כל הדקות עד עכשיו
+                else:
+                    current_offset = 0  # הפסקה/כוננות מאפסת את ה-offset
 
                 current_chain_segments = []
                 first_chain_of_day = False
@@ -1336,21 +1387,25 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                         "effective_rate": minimum_wage,
                     })
                 elif etype == "vacation" or etype == "sick":
-                    hrs = (end - start) / 60
-                    d_payment += hrs * minimum_wage
+                    duration = end - start
+                    hrs = duration / 60
+                    pay = hrs * minimum_wage
+                    d_payment += pay
+                    d_calc100 += duration  # מחלה/חופשה = 100%
 
+                    label = "חופשה" if etype == "vacation" else "מחלה"
                     chains.append({
                         "start_time": f"{start // 60 % 24:02d}:{start % 60:02d}",
                         "end_time": f"{end // 60 % 24:02d}:{end % 60:02d}",
-                        "total_minutes": end - start,
-                        "payment": hrs * minimum_wage,
-                        "calc100": 0, "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0,
-                        "type": "vacation",
+                        "total_minutes": duration,
+                        "payment": pay,
+                        "calc100": duration, "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0,
+                        "type": etype,  # "vacation" או "sick"
                         "apartment_name": "",
                         "apartment_type_id": None,
-                        "shift_name": "חופשה" if etype == "vacation" else "מחלה",
-                        "shift_type": "חופשה" if etype == "vacation" else "מחלה",
-                        "segments": [],
+                        "shift_name": label,
+                        "shift_type": label,
+                        "segments": [(f"{start // 60 % 24:02d}:{start % 60:02d}", f"{end // 60 % 24:02d}:{end % 60:02d}", label)],
                         "break_reason": "",
                         "from_prev_day": start >= MINUTES_PER_DAY,
                         "effective_rate": minimum_wage,
@@ -1360,13 +1415,14 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 last_etype = etype
             else:
                 # segments: (start, end, label, shift_id, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type)
-                current_chain_segments.append((start, end, event["label"], event["shift_id"], event.get("apartment_name", ""), event.get("actual_date"), event.get("apartment_type_id"), event.get("apartment_type_id"), event.get("rate_apt_type")))
+                # apt_type = rate_apt_type (לחישוב), actual_apt_type = apartment_type_id (להצגה)
+                current_chain_segments.append((start, end, event["label"], event["shift_id"], event.get("apartment_name", ""), event.get("actual_date"), event.get("rate_apt_type"), event.get("apartment_type_id"), event.get("rate_apt_type")))
                 last_end = end
                 last_etype = etype
 
         # Close last chain
         if current_chain_segments:
-            chain_offset = current_offset if first_chain_of_day else 0
+            chain_offset = current_offset
             pay, c100, c125, c150, c175, c200, chain_total, ends_at_0800 = close_chain_and_record(
                 current_chain_segments, "", chain_offset)
             d_payment += pay
@@ -1407,6 +1463,10 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         if bonus_mins > 0:
             d_calc100 += bonus_mins
             d_payment += (bonus_mins / 60) * minimum_wage
+
+        # Add partial payments from cancelled standbys (when standby > 70₪)
+        cancelled_partial_pay = sum(c.get("partial_pay", 0) for c in cancelled_standbys)
+        d_standby_pay += cancelled_partial_pay
 
         daily_segments.append({
             "day": day,

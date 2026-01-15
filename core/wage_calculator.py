@@ -173,7 +173,8 @@ def _calculate_chain_wages(
                     if block_abs_start >= MINUTES_PER_DAY:
                         day_offset_start = MINUTES_PER_DAY
                     # אם הזמן נגמר אחרי חצות (ומתחיל לפני), זה עובר לשבת בבוקר
-                    if block_abs_end >= MINUTES_PER_DAY:
+                    # שימוש ב-> ולא >= כי 1440 בדיוק (חצות) הוא עדיין סוף יום שישי
+                    if block_abs_end > MINUTES_PER_DAY:
                         day_offset_end = MINUTES_PER_DAY
                 elif weekday == SATURDAY:
                     day_offset_start = MINUTES_PER_DAY

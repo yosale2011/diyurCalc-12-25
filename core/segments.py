@@ -205,9 +205,9 @@ def _process_fixed_vacation_shift(
     r_date: date
 ) -> None:
     """
-    עיבוד משמרת חופשה/מחלה קבועה - מסמן סגמנטים כסוג חופשה.
+    עיבוד משמרת חופשה/מחלה קבועה - מסמן סגמנטים כסוג מתאים.
 
-    משמרות חופשה משתמשות בסגמנטים מוגדרים מראש אבל מסומנות כחופשה.
+    משמרות חופשה/מחלה משתמשות בסגמנטים מוגדרים מראש.
 
     פרמטרים:
         daily_map: מפת הימים לעדכון
@@ -219,6 +219,10 @@ def _process_fixed_vacation_shift(
     day_key = display_date.strftime("%d/%m/%Y")
     entry = daily_map.setdefault(day_key, {"segments": [], "date": display_date, "escort_bonus_minutes": 0})
 
+    # זיהוי סוג - מחלה או חופשה
+    shift_name = r.get("shift_name") or ""
+    segment_type = "sick" if "מחלה" in shift_name else "vacation"
+
     for seg in seg_list:
         seg_start, seg_end = span_minutes(seg["start_time"], seg["end_time"])
 
@@ -226,9 +230,8 @@ def _process_fixed_vacation_shift(
         apartment_type_id = r.get("apartment_type_id")
         is_married = r.get("is_married")
 
-        # סימון כחופשה - יטופל בנפרד ב-_process_daily_map
         entry["segments"].append((
-            seg_start, seg_end, "vacation",
+            seg_start, seg_end, segment_type,
             r["shift_type_id"], segment_id, apartment_type_id, is_married
         ))
 
@@ -427,9 +430,9 @@ def _build_daily_map(
                         eff_end = eff_end_in_part
 
                     eff_type = seg["segment_type"]
-                    # אם זה דיווח חופשה/מחלה - סמן כחופשה
+                    # אם זה דיווח חופשה/מחלה - סמן לפי סוג
                     if is_vacation_report:
-                        eff_type = "vacation"
+                        eff_type = "sick" if "מחלה" in shift_name else "vacation"
 
                     segment_id = seg.get("id")
                     apartment_type_id = r.get("apartment_type_id")

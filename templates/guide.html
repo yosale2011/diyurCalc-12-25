@@ -553,7 +553,7 @@
               <td>{{ shift['report']['date']|human_date }}</td>
               <td>{{ shift['report']['start_time'] or '-' }}</td>
               <td>{{ shift['report']['end_time'] or '-' }}</td>
-              <td>{{ shift['report']['shift_name'] or shift['report']['shift_type'] or '-' }}</td>
+              <td>{{ shift['display_shift_name'] or shift['report']['shift_name'] or '-' }}</td>
               <td>{{ shift['report']['apartment_name'] or shift['report']['apartment_id'] or '-' }}</td>
               <td>{{ 'מאושר' if shift['report']['is_approved'] else 'ממתין' }}</td>
             </tr>

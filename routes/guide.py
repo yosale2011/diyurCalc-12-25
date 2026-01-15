@@ -21,7 +21,7 @@ from core.logic import (
     calculate_person_monthly_totals,
 )
 from core.history import get_minimum_wage_for_month
-from app_utils import get_daily_segments_data
+from app_utils import get_daily_segments_data, _is_implicit_tagbur, FRIDAY_SHIFT_ID, SHABBAT_SHIFT_ID
 from utils.utils import human_date, format_currency, month_range_ts
 import psycopg2.extras
 
@@ -350,6 +350,7 @@ def guide_view(
             month_reports = conn.execute("""
                 SELECT tr.*, st.name as shift_name,
                        a.apartment_type_id, a.name as apartment_name,
+                       tr.rate_apartment_type_id,
                        p.is_married
                 FROM time_reports tr
                 LEFT JOIN shift_types st ON st.id = tr.shift_type_id
@@ -457,8 +458,21 @@ def guide_view(
 
                 total_shift_payment = shift_payment + shift_standby_payment
 
+                # בדיקת תגבור משתמע להצגה בטאב משמרות
+                shift_id = report.get('shift_type_id')
+                actual_apt_type = report.get('apartment_type_id')
+                rate_apt_type = report.get('rate_apartment_type_id') or actual_apt_type
+                display_shift_name = report.get('shift_name', '')
+
+                if _is_implicit_tagbur(shift_id, actual_apt_type, rate_apt_type):
+                    if shift_id == FRIDAY_SHIFT_ID:
+                        display_shift_name = "משמרת תגבור שישי/ערב חג"
+                    elif shift_id == SHABBAT_SHIFT_ID:
+                        display_shift_name = "משמרת תגבור שבת/חג"
+
                 shift_segments.append({
                     "report": report,
+                    "display_shift_name": display_shift_name,
                     "payment": total_shift_payment,
                     "work_payment": shift_payment,
                     "standby_payment": shift_standby_payment
