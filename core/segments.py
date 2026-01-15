@@ -24,6 +24,16 @@ logger = logging.getLogger(__name__)
 # Break threshold (in minutes) - breaks longer than this split work chains
 BREAK_THRESHOLD_MINUTES = 60
 
+# קבועים - IDs של סוגי משמרות
+FRIDAY_SHIFT_ID = 105         # משמרת שישי/ערב חג
+SHABBAT_SHIFT_ID = 106        # משמרת שבת/חג
+NIGHT_SHIFT_ID = 107          # משמרת לילה
+TAGBUR_FRIDAY_SHIFT_ID = 108  # משמרת תגבור שישי/ערב חג
+TAGBUR_SHABBAT_SHIFT_ID = 109 # משמרת תגבור שבת/חג
+
+# קבוצות IDs לבדיקות
+TAGBUR_SHIFT_IDS = {TAGBUR_FRIDAY_SHIFT_ID, TAGBUR_SHABBAT_SHIFT_ID}  # משמרות תגבור
+
 # Night shift constants
 NIGHT_SHIFT_WORK_FIRST_MINUTES = 2 * MINUTES_PER_HOUR  # 120 = first 2 hours are work
 NIGHT_SHIFT_STANDBY_END = 390  # 06:30 in minutes
@@ -271,19 +281,20 @@ def _build_daily_map(
 
         work_type = r.get("work_type")
         shift_name = r.get("shift_name") or ""
+        shift_type_id = r.get("shift_type_id")
         is_vacation_report = (work_type == "sick_vacation" or
                              "חופשה" in shift_name or
                              "מחלה" in shift_name)
 
         # משמרות תגבור - משתמשים בסגמנטים המוגדרים ישירות (לא לפי שעות דיווח)
         # הערה: חופשה/מחלה מטופלות בנפרד - לא כתגבור
-        is_tagbur_shift = "תגבור" in shift_name
+        is_tagbur_shift = (shift_type_id in TAGBUR_SHIFT_IDS)  # בדיקה לפי ID
 
         # משמרות חופשה/מחלה - סגמנטים קבועים אבל נספרות כחופשה
         is_fixed_vacation_shift = is_vacation_report and not is_tagbur_shift
 
         # משמרת לילה - סגמנטים דינמיים לפי זמן הכניסה בפועל
-        is_night_shift = (shift_name == "משמרת לילה")
+        is_night_shift = (shift_type_id == NIGHT_SHIFT_ID)  # בדיקה לפי ID
         if is_night_shift:
             entry_time = r_start
             exit_time = r_end if r_end > entry_time else r_end + MINUTES_PER_DAY
