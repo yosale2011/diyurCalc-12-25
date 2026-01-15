@@ -1197,22 +1197,19 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 start_str = f"{seg_start // 60 % 24:02d}:{seg_start % 60:02d}"
                 end_str = f"{seg_end // 60 % 24:02d}:{seg_end % 60:02d}"
 
-                # Determine shift type label
+                # Determine shift type label (לפי ID, לא לפי שם)
                 shift_type_label = ""
-                if shift_name_str:
-                    if "תגבור" in shift_name_str:
-                        shift_type_label = "תגבור"
-                    elif _is_implicit_tagbur(chain_shift_id, chain_actual_apt, chain_rate_apt):
-                        # משמרת שישי/שבת בדירה טיפולית עם תעריף דירה רגילה = תגבור
-                        shift_type_label = "תגבור"
-                    elif "לילה" in shift_name_str:
-                        shift_type_label = "לילה"
-                    elif is_shabbat:
-                        shift_type_label = "שבת"
-                    else:
-                        shift_type_label = "חול"
+                if _is_tagbur_shift(chain_shift_id):
+                    shift_type_label = "תגבור"
+                elif _is_implicit_tagbur(chain_shift_id, chain_actual_apt, chain_rate_apt):
+                    # משמרת שישי/שבת בדירה טיפולית עם תעריף דירה רגילה = תגבור
+                    shift_type_label = "תגבור"
+                elif _is_night_shift(chain_shift_id):
+                    shift_type_label = "לילה"
+                elif _is_shabbat_shift(chain_shift_id) or is_shabbat:
+                    shift_type_label = "שבת"
                 else:
-                    shift_type_label = "חול" if not is_shabbat else "שבת"
+                    shift_type_label = "חול"
                 
                 chains.append({
                     "start_time": start_str,
