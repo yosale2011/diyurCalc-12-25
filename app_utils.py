@@ -39,6 +39,8 @@ from core.constants import (
     is_night_shift,
     is_shabbat_shift,
     is_implicit_tagbur,
+    # Night shift overtime detection
+    qualifies_as_night_shift,
 )
 
 logger = logging.getLogger(__name__)
@@ -847,7 +849,11 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 deduped.append(w)
                 seen.add(k)
         work_segments = deduped  # Each is (start, end, label, sid, apt_name, actual_date, apt_type, actual_apt_type)
-        
+
+        # Check if this day qualifies as night shift (2+ hours in 22:00-06:00)
+        # Night shifts use 7-hour workday instead of 8-hour for overtime calculation
+        day_is_night_shift = qualifies_as_night_shift([(w[0], w[1]) for w in work_segments])
+
         # Dedup standby - now includes shift_type_id (7 elements)
         deduped_sb = []
         seen_sb = set()
@@ -1210,7 +1216,8 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             calc_date = day_date
 
             # Use optimized block calculation with carryover offset
-            result = _calculate_chain_wages(chain_segs, calc_date, shabbat_cache, minutes_offset)
+            # Pass night shift flag for 7-hour workday threshold
+            result = _calculate_chain_wages(chain_segs, calc_date, shabbat_cache, minutes_offset, day_is_night_shift)
 
             c_100 = result["calc100"]
             c_125 = result["calc125"]

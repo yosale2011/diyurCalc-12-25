@@ -1187,6 +1187,12 @@
                     <td>-</td>
                     <td>-</td>
                     <td>{{ val | format_currency }}</td>
+                    {% elif key == 'sick_payment' %}
+                    {# תשלום מחלה - שעות מחלה עם תשלום מדורג לפי החוק #}
+                    {% set sick_hours = (monthly_totals.sick_minutes or 0) / 60 %}
+                    <td>{{ sick_hours | round(2) }}</td>
+                    <td>{{ "%.2f"|format(hourly_rate) }} ₪</td>
+                    <td>{{ val | format_currency }}</td>
                     {% elif key == 'calc_variable' %}
                     {# שעות בתעריף משתנה - תעריף שונה משכר מינימום #}
                     <td>{{ (val | float / 60) | round(2) }}</td>

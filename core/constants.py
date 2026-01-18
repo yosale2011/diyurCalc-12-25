@@ -58,6 +58,20 @@ NIGHT_SHIFT_MORNING_END = 480           # 08:00 = סוף עבודת בוקר
 NOON_MINUTES = 720                      # 12:00 = חצות היום
 
 # =============================================================================
+# Night Shift Overtime Thresholds (in minutes)
+# A shift qualifies as "night shift" if 2+ hours are between 22:00-06:00
+# Night shifts use 7-hour workday instead of 8-hour
+# =============================================================================
+
+NIGHT_REGULAR_HOURS_LIMIT = 420         # 7 hours = 100% (for night shifts)
+NIGHT_OVERTIME_125_LIMIT = 540          # 9 hours = 125% (for night shifts)
+
+# Night hours definition (22:00-06:00)
+NIGHT_HOURS_START = 22 * 60             # 1320 = 22:00
+NIGHT_HOURS_END = 6 * 60                # 360 = 06:00
+NIGHT_HOURS_THRESHOLD = 120             # 2 hours required to qualify as night shift
+
+# =============================================================================
 # Standby Constants
 # =============================================================================
 
@@ -138,3 +152,57 @@ def is_implicit_tagbur(
     is_therapeutic_apt = (actual_apt_type == THERAPEUTIC_APT_TYPE)
     is_regular_rate = (rate_apt_type == REGULAR_APT_TYPE)
     return is_friday_or_shabbat and is_therapeutic_apt and is_regular_rate
+
+
+# =============================================================================
+# Night Hours Detection Functions
+# =============================================================================
+
+def calculate_night_hours_in_segment(start_min: int, end_min: int) -> int:
+    """
+    Calculate how many minutes of a segment fall within night hours (22:00-06:00).
+
+    Args:
+        start_min: Start time in minutes from midnight
+        end_min: End time in minutes from midnight (can be >1440 for overnight)
+
+    Returns:
+        Minutes of work within 22:00-06:00 range
+    """
+    total_night_minutes = 0
+
+    # Normalize overnight shifts
+    if end_min <= start_min:
+        end_min += 1440
+
+    # Range 1: 22:00-24:00 (1320-1440)
+    overlap_start = max(start_min, NIGHT_HOURS_START)
+    overlap_end = min(end_min, 1440)
+    if overlap_end > overlap_start:
+        total_night_minutes += overlap_end - overlap_start
+
+    # Range 2: 00:00-06:00 (check both original and shifted for overnight)
+    for offset in [0, 1440]:
+        overlap_start = max(start_min, offset)
+        overlap_end = min(end_min, NIGHT_HOURS_END + offset)
+        if overlap_end > overlap_start:
+            total_night_minutes += overlap_end - overlap_start
+
+    return total_night_minutes
+
+
+def qualifies_as_night_shift(work_segments: list) -> bool:
+    """
+    Check if work segments qualify as night shift (2+ hours in 22:00-06:00).
+
+    Args:
+        work_segments: List of (start_min, end_min) tuples
+
+    Returns:
+        True if total night hours >= 120 minutes (2 hours)
+    """
+    total_night = sum(
+        calculate_night_hours_in_segment(start, end)
+        for start, end in work_segments
+    )
+    return total_night >= NIGHT_HOURS_THRESHOLD

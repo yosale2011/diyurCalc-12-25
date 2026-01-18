@@ -34,6 +34,12 @@ from core.logic import (
     FRIDAY,
     SATURDAY
 )
+from core.constants import (
+    NIGHT_REGULAR_HOURS_LIMIT,
+    NIGHT_OVERTIME_125_LIMIT,
+    calculate_night_hours_in_segment,
+    qualifies_as_night_shift,
+)
 
 # ============================================================================
 # חלק 1: בדיקות אוטומטיות (Unit Tests)
@@ -640,6 +646,157 @@ class TestChainCalculationIntegration(unittest.TestCase):
         self.assertEqual(result["calc100"], 480)   # 8 שעות
         self.assertEqual(result["calc125"], 120)   # 2 שעות
         self.assertEqual(result["calc150"], 360)   # 6 שעות
+
+
+class TestNightShiftDetection(unittest.TestCase):
+    """בדיקות זיהוי שעות לילה (22:00-06:00)"""
+
+    def test_night_hours_full_night(self):
+        """משמרת שלמה בלילה 22:00-06:00"""
+        # 22:00 = 1320, 06:00 = 360 (למחרת) = 1800 בייצוג מנורמל
+        night_mins = calculate_night_hours_in_segment(1320, 1800)
+        self.assertEqual(night_mins, 480)  # 8 שעות
+
+    def test_night_hours_partial_evening(self):
+        """משמרת ערב חלקית 20:00-23:00"""
+        # רק שעה אחת בלילה (22:00-23:00)
+        night_mins = calculate_night_hours_in_segment(1200, 1380)
+        self.assertEqual(night_mins, 60)  # שעה אחת
+
+    def test_night_hours_early_morning(self):
+        """משמרת בוקר מוקדם 04:00-08:00"""
+        # 04:00-06:00 = 2 שעות לילה
+        night_mins = calculate_night_hours_in_segment(240, 480)
+        self.assertEqual(night_mins, 120)  # 2 שעות
+
+    def test_night_hours_no_night(self):
+        """משמרת יום 08:00-16:00"""
+        night_mins = calculate_night_hours_in_segment(480, 960)
+        self.assertEqual(night_mins, 0)
+
+    def test_qualifies_2_hours(self):
+        """סף 2 שעות - בדיוק 2 שעות"""
+        # 22:00-00:00 = בדיוק 2 שעות
+        self.assertTrue(qualifies_as_night_shift([(1320, 1440)]))
+
+    def test_qualifies_above_threshold(self):
+        """מעל סף 2 שעות"""
+        # 22:00-01:00 = 3 שעות
+        self.assertTrue(qualifies_as_night_shift([(1320, 1500)]))
+
+    def test_not_qualifies_below_threshold(self):
+        """מתחת לסף 2 שעות"""
+        # 22:00-23:30 = 1.5 שעות
+        self.assertFalse(qualifies_as_night_shift([(1320, 1410)]))
+
+    def test_qualifies_multiple_segments(self):
+        """מספר סגמנטים שביחד מגיעים ל-2 שעות"""
+        # 22:00-23:00 (1 שעה) + 05:00-06:00 (1 שעה) = 2 שעות
+        segments = [(1320, 1380), (300, 360)]
+        self.assertTrue(qualifies_as_night_shift(segments))
+
+
+class TestNightShiftOvertime(unittest.TestCase):
+    """בדיקות שעות נוספות במשמרת לילה (סף 7 שעות)"""
+
+    def test_night_shift_7_hours_all_100(self):
+        """משמרת לילה של 7 שעות = הכל 100%"""
+        # 22:00-05:00 = 7 שעות (1320-1740)
+        segments = [(1320, 1740, None)]
+        result = _calculate_chain_wages(segments, date(2024, 12, 15), {}, 0, is_night_shift=True)
+
+        self.assertEqual(result["calc100"], 420)  # 7 שעות
+        self.assertEqual(result["calc125"], 0)
+        self.assertEqual(result["calc150"], 0)
+
+    def test_night_shift_8_hours_has_125(self):
+        """משמרת לילה של 8 שעות = 7 שעות 100% + 1 שעה 125%"""
+        # 22:00-06:00 = 8 שעות (1320-1800)
+        segments = [(1320, 1800, None)]
+        result = _calculate_chain_wages(segments, date(2024, 12, 15), {}, 0, is_night_shift=True)
+
+        self.assertEqual(result["calc100"], 420)  # 7 שעות
+        self.assertEqual(result["calc125"], 60)   # 1 שעה
+        self.assertEqual(result["calc150"], 0)
+
+    def test_night_shift_10_hours_has_150(self):
+        """משמרת לילה של 10 שעות = 7 שעות 100% + 2 שעות 125% + 1 שעה 150%"""
+        # 20:00-06:00 = 10 שעות (1200-1800)
+        segments = [(1200, 1800, None)]
+        result = _calculate_chain_wages(segments, date(2024, 12, 15), {}, 0, is_night_shift=True)
+
+        self.assertEqual(result["calc100"], 420)  # 7 שעות
+        self.assertEqual(result["calc125"], 120)  # 2 שעות
+        self.assertEqual(result["calc150"], 60)   # 1 שעה
+
+    def test_regular_shift_8_hours_all_100(self):
+        """משמרת רגילה של 8 שעות = הכל 100% (סף 8 שעות)"""
+        # 08:00-16:00 = 8 שעות
+        segments = [(480, 960, None)]
+        result = _calculate_chain_wages(segments, date(2024, 12, 15), {}, 0, is_night_shift=False)
+
+        self.assertEqual(result["calc100"], 480)  # 8 שעות
+        self.assertEqual(result["calc125"], 0)
+        self.assertEqual(result["calc150"], 0)
+
+    def test_regular_shift_9_hours_has_125(self):
+        """משמרת רגילה של 9 שעות = 8 שעות 100% + 1 שעה 125%"""
+        # 08:00-17:00 = 9 שעות
+        segments = [(480, 1020, None)]
+        result = _calculate_chain_wages(segments, date(2024, 12, 15), {}, 0, is_night_shift=False)
+
+        self.assertEqual(result["calc100"], 480)  # 8 שעות
+        self.assertEqual(result["calc125"], 60)   # 1 שעה
+        self.assertEqual(result["calc150"], 0)
+
+    def test_night_vs_regular_comparison(self):
+        """השוואה: אותה משמרת עם דגל לילה שונה"""
+        # משמרת 18:00-02:00 = 8 שעות (1080-1560)
+        segments = [(1080, 1560, None)]
+
+        # כמשמרת רגילה (סף 8 שעות)
+        result_regular = _calculate_chain_wages(segments, date(2024, 12, 15), {}, 0, is_night_shift=False)
+        self.assertEqual(result_regular["calc100"], 480)  # 8 שעות ב-100%
+        self.assertEqual(result_regular["calc125"], 0)
+
+        # כמשמרת לילה (סף 7 שעות)
+        result_night = _calculate_chain_wages(segments, date(2024, 12, 15), {}, 0, is_night_shift=True)
+        self.assertEqual(result_night["calc100"], 420)   # 7 שעות ב-100%
+        self.assertEqual(result_night["calc125"], 60)    # 1 שעה ב-125%
+
+
+class TestNightShiftWageRate(unittest.TestCase):
+    """בדיקות פונקציית calculate_wage_rate עם משמרת לילה"""
+
+    def test_night_shift_rate_at_7_hours(self):
+        """בדיוק 7 שעות במשמרת לילה = 100%"""
+        self.assertEqual(calculate_wage_rate(420, False, is_night_shift=True), "100%")
+
+    def test_night_shift_rate_at_8_hours(self):
+        """8 שעות במשמרת לילה = 125%"""
+        self.assertEqual(calculate_wage_rate(421, False, is_night_shift=True), "125%")
+
+    def test_night_shift_rate_at_9_hours(self):
+        """9 שעות במשמרת לילה = 125%"""
+        self.assertEqual(calculate_wage_rate(540, False, is_night_shift=True), "125%")
+
+    def test_night_shift_rate_at_10_hours(self):
+        """10 שעות במשמרת לילה = 150%"""
+        self.assertEqual(calculate_wage_rate(541, False, is_night_shift=True), "150%")
+
+    def test_night_shift_shabbat_rate(self):
+        """משמרת לילה בשבת"""
+        self.assertEqual(calculate_wage_rate(420, True, is_night_shift=True), "150%")   # 7 שעות
+        self.assertEqual(calculate_wage_rate(421, True, is_night_shift=True), "175%")   # 8 שעות
+        self.assertEqual(calculate_wage_rate(541, True, is_night_shift=True), "200%")   # 10 שעות
+
+    def test_regular_shift_rate_at_8_hours(self):
+        """בדיוק 8 שעות במשמרת רגילה = 100%"""
+        self.assertEqual(calculate_wage_rate(480, False, is_night_shift=False), "100%")
+
+    def test_regular_shift_rate_at_9_hours(self):
+        """9 שעות במשמרת רגילה = 125%"""
+        self.assertEqual(calculate_wage_rate(481, False, is_night_shift=False), "125%")
 
 
 # ============================================================================

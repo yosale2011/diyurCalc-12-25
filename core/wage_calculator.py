@@ -15,6 +15,11 @@ from core.time_utils import (
     _get_shabbat_boundaries
 )
 from core.segments import BREAK_THRESHOLD_MINUTES
+from core.constants import (
+    NIGHT_REGULAR_HOURS_LIMIT,
+    NIGHT_OVERTIME_125_LIMIT,
+    qualifies_as_night_shift,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +41,8 @@ DEFAULT_STANDBY_RATE = 70.0
 
 def calculate_wage_rate(
     minutes_in_chain: int,
-    is_shabbat: bool
+    is_shabbat: bool,
+    is_night_shift: bool = False
 ) -> str:
     """
     Determine the wage rate label based on hours worked in chain and Shabbat status.
@@ -44,13 +50,18 @@ def calculate_wage_rate(
     Args:
         minutes_in_chain: Total minutes worked so far in the current chain
         is_shabbat: Whether this minute falls within Shabbat hours
+        is_night_shift: Whether this is a night shift (uses 7-hour day instead of 8)
 
     Returns:
         Rate label: "100%", "125%", "150%", "175%", or "200%"
     """
-    if minutes_in_chain <= REGULAR_HOURS_LIMIT:
+    # Use night shift thresholds if applicable (7 hours instead of 8)
+    regular_limit = NIGHT_REGULAR_HOURS_LIMIT if is_night_shift else REGULAR_HOURS_LIMIT
+    overtime_limit = NIGHT_OVERTIME_125_LIMIT if is_night_shift else OVERTIME_125_LIMIT
+
+    if minutes_in_chain <= regular_limit:
         return "150%" if is_shabbat else "100%"
-    elif minutes_in_chain <= OVERTIME_125_LIMIT:
+    elif minutes_in_chain <= overtime_limit:
         return "175%" if is_shabbat else "125%"
     else:
         return "200%" if is_shabbat else "150%"
@@ -64,14 +75,15 @@ def _calculate_chain_wages(
     chain_segments: List[Tuple[int, int, int]],
     day_date: date,
     shabbat_cache: Dict[str, Dict[str, str]],
-    minutes_offset: int = 0
+    minutes_offset: int = 0,
+    is_night_shift: bool = False
 ) -> Dict[str, Any]:
     """
     חישוב שכר לרצף עבודה (chain) בשיטת בלוקים.
 
     במקום לעבור דקה-דקה, מחשב בלוקים לפי גבולות:
-    - 480 דקות (מעבר 100% -> 125%)
-    - 600 דקות (מעבר 125% -> 150%)
+    - 480 דקות (מעבר 100% -> 125%) - או 420 למשמרת לילה
+    - 600 דקות (מעבר 125% -> 150%) - או 540 למשמרת לילה
     - גבולות שבת (כניסה/יציאה)
 
     Args:
@@ -79,6 +91,7 @@ def _calculate_chain_wages(
         day_date: The date for Shabbat calculation
         shabbat_cache: Cache of Shabbat times
         minutes_offset: Minutes already worked in this chain (from previous day's carryover)
+        is_night_shift: Whether this is a night shift (uses 7-hour day instead of 8)
 
     Returns:
         Dict with calc100, calc125, calc150, calc175, calc200,
@@ -113,7 +126,9 @@ def _calculate_chain_wages(
         total_chain_minutes += (seg_end - seg_start)
 
     # Process in blocks based on overtime thresholds
-    # Thresholds: 0-480 = tier1, 480-600 = tier2, 600+ = tier3
+    # Use night shift thresholds if applicable (7 hours instead of 8)
+    regular_limit = NIGHT_REGULAR_HOURS_LIMIT if is_night_shift else REGULAR_HOURS_LIMIT
+    overtime_limit = NIGHT_OVERTIME_125_LIMIT if is_night_shift else OVERTIME_125_LIMIT
     # Start from offset if this chain continues from previous day
     minutes_processed = minutes_offset
 
@@ -126,12 +141,12 @@ def _calculate_chain_wages(
             current_chain_minute = minutes_processed + 1  # 1-based for wage calculation
 
             # Determine which overtime tier we're in
-            if current_chain_minute <= REGULAR_HOURS_LIMIT:
-                tier_end = REGULAR_HOURS_LIMIT
+            if current_chain_minute <= regular_limit:
+                tier_end = regular_limit
                 base_rate = "100%"
                 shabbat_rate = "150%"
-            elif current_chain_minute <= OVERTIME_125_LIMIT:
-                tier_end = OVERTIME_125_LIMIT
+            elif current_chain_minute <= overtime_limit:
+                tier_end = overtime_limit
                 base_rate = "125%"
                 shabbat_rate = "175%"
             else:
@@ -541,6 +556,10 @@ def _process_daily_map(
                 seen.add(key)
         work_segments = deduped
 
+        # Check if this day qualifies as night shift (2+ hours in 22:00-06:00)
+        # Night shifts use 7-hour workday instead of 8-hour for overtime calculation
+        day_is_night_shift = qualifies_as_night_shift([(w[0], w[1]) for w in work_segments])
+
         # הסרת כפילויות מקטעי כוננות
         seen_standby = set()
         deduped_standby = []
@@ -655,7 +674,7 @@ def _process_daily_map(
             if not current_chain_segments:
                 return
 
-            chain_wages = _calculate_chain_wages(current_chain_segments, day_date, shabbat_cache, minutes_offset)
+            chain_wages = _calculate_chain_wages(current_chain_segments, day_date, shabbat_cache, minutes_offset, day_is_night_shift)
             for key in day_wages:
                 day_wages[key] += chain_wages[key]
 
