@@ -2,11 +2,11 @@
 Core business logic for DiyurCalc application.
 Contains public API functions for calculating monthly totals and summaries.
 
-This module re-exports functions from submodules for backwards compatibility.
-New code should import directly from the submodules:
+Import directly from submodules for specific functionality:
 - core.time_utils: Time conversion and Shabbat detection
 - core.segments: Shift segment processing
 - core.wage_calculator: Wage calculation and daily processing
+- core.constants: Shift IDs and constants
 """
 import logging
 import psycopg2
@@ -14,45 +14,8 @@ import psycopg2.extras
 from typing import List, Tuple, Dict, Any
 
 from utils.cache_manager import cached, cache
-
-# =============================================================================
-# Re-exports from submodules for backwards compatibility
-# =============================================================================
-
-# Time utilities and Shabbat
-from core.time_utils import (
-    MINUTES_PER_HOUR,
-    MINUTES_PER_DAY,
-    REGULAR_HOURS_LIMIT,
-    OVERTIME_125_LIMIT,
-    WORK_DAY_START_MINUTES,
-    SHABBAT_ENTER_DEFAULT,
-    SHABBAT_EXIT_DEFAULT,
-    LOCAL_TZ,
-    to_local_date,
-    span_minutes,
-    minutes_to_time_str,
-    is_shabbat_time,
-    get_shabbat_times_cache,
-)
-
-# Segment processing
-from core.segments import (
-    BREAK_THRESHOLD_MINUTES,
-    NIGHT_SHIFT_WORK_FIRST_MINUTES,
-    NIGHT_SHIFT_STANDBY_END,
-    NIGHT_SHIFT_MORNING_END,
-    NOON_MINUTES,
-    MEDICAL_ESCORT_SHIFT_ID,
-)
-
-# Wage calculation
-from core.wage_calculator import (
-    STANDBY_CANCEL_OVERLAP_THRESHOLD,
-    DEFAULT_STANDBY_RATE,
-    calculate_wage_rate,
-    _calculate_chain_wages,
-)
+from core.time_utils import get_shabbat_times_cache
+from core.wage_calculator import DEFAULT_STANDBY_RATE
 
 # =============================================================================
 # Configure logging

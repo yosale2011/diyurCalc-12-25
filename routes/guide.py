@@ -14,8 +14,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from core.config import config
 from core.database import get_conn
+from core.time_utils import get_shabbat_times_cache
 from core.logic import (
-    get_shabbat_times_cache,
     get_payment_codes,
     get_available_months_for_person,
 )

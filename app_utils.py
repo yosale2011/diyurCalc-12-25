@@ -5,7 +5,7 @@ from core.time_utils import (
     MINUTES_PER_HOUR, MINUTES_PER_DAY, LOCAL_TZ,
     span_minutes, to_local_date, is_shabbat_time,
 )
-from core.segments import BREAK_THRESHOLD_MINUTES
+from core.constants import BREAK_THRESHOLD_MINUTES
 from core.wage_calculator import (
     STANDBY_CANCEL_OVERLAP_THRESHOLD, DEFAULT_STANDBY_RATE,
     _calculate_chain_wages,

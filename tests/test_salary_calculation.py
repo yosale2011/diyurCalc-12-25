@@ -25,14 +25,13 @@ from decimal import Decimal
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from core.logic import (
-    calculate_wage_rate,
-    _calculate_chain_wages,
+from core.wage_calculator import calculate_wage_rate, _calculate_chain_wages
+from core.time_utils import (
     is_shabbat_time,
     REGULAR_HOURS_LIMIT,
     OVERTIME_125_LIMIT,
     FRIDAY,
-    SATURDAY
+    SATURDAY,
 )
 from core.constants import (
     NIGHT_REGULAR_HOURS_LIMIT,
