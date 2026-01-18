@@ -368,7 +368,7 @@
         <div style="background: #059669; border-radius: 6px; padding: 4px 10px;">
           <span style="font-size: 12px; color: rgba(255,255,255,0.85);">לתשלום:</span>
           <span style="font-size: 16px; font-weight: 700; color: white;">{{ "{:,.2f}".format((monthly_totals.payment or
-            0) + (monthly_totals.travel or 0) + (monthly_totals.extras or 0)) }}</span>
+            0) + (monthly_totals.standby_payment or 0) + (monthly_totals.travel or 0) + (monthly_totals.extras or 0)) }}</span>
         </div>
 
         <div style="height: 20px; border-left: 1px solid #cbd5e1;"></div>
@@ -398,14 +398,16 @@
         </div>
         {% endif %}
         {% endfor %}
-        {% if monthly_totals.calc_variable and monthly_totals.calc_variable > 0 %}
+        {% for rate, data in monthly_totals.variable_rates.items() %}
+        {% set var_total = (data.calc100 or 0) + (data.calc125 or 0) + (data.calc150 or 0) + (data.calc175 or 0) + (data.calc200 or 0) %}
+        {% if var_total > 0 %}
         <div
           style="display: flex; align-items: center; gap: 4px; background: #14b8a615; border: 1px solid #14b8a630; border-radius: 4px; padding: 2px 8px;">
-          <span style="font-size: 11px; color: #14b8a6; font-weight: 600;">משתנה</span>
-          <span style="font-size: 13px; font-weight: 700; color: #1e293b;">{{ (monthly_totals.calc_variable | float /
-            60) | round(1) }}</span>
+          <span style="font-size: 11px; color: #14b8a6; font-weight: 600;">{{ "%.0f"|format(rate) }}₪</span>
+          <span style="font-size: 13px; font-weight: 700; color: #1e293b;">{{ (var_total / 60) | round(1) }}</span>
         </div>
         {% endif %}
+        {% endfor %}
       </div>
     </div>
 
@@ -772,6 +774,9 @@
               {% set calc150_shabbat_hours = (monthly_totals.calc150_shabbat or 0) / 60 %}
               {% set calc175_hours = (monthly_totals.calc175 or 0) / 60 %}
               {% set calc200_hours = (monthly_totals.calc200 or 0) / 60 %}
+              {% set calc_variable_hours = (monthly_totals.calc_variable or 0) / 60 %}
+              {% set payment_calc_variable = monthly_totals.get('payment_calc_variable', 0) or 0 %}
+              {% set variable_rate_value = monthly_totals.get('variable_rate_value', 0) or 0 %}
 
               {% set weekday_total_hours = calc100_hours + calc125_hours + calc150_overtime_hours %}
               {% set shabbat_total_hours = calc150_shabbat_hours + calc175_hours + calc200_hours %}
@@ -867,13 +872,102 @@
                 <td style="text-align: center; padding: 6px 8px;">-</td>
               </tr>
 
-              {# שורה שלישית - סיכום כללי #}
+              {# שורות תעריף משתנה - שורה נפרדת לכל תעריף עם פירוט אחוזים #}
+              {% for rate, data in monthly_totals.variable_rates.items() %}
+              {% set var_total_minutes = (data.calc100 or 0) + (data.calc125 or 0) + (data.calc150 or 0) + (data.calc175 or 0) + (data.calc200 or 0) %}
+              {% set var_hours = var_total_minutes / 60 %}
+              {% if var_hours > 0 %}
+              <tr style="background-color: #f0e6ff; font-weight: bold; border-top: 1px solid #ccc;">
+                <td colspan="3" style="text-align: right; padding: 6px 8px;">
+                  <strong>סיכום תעריף {{ "%.2f"|format(rate) }} ₪:</strong>
+                </td>
+                <td style="text-align: center; padding: 6px 8px; font-weight: bold;">
+                  {{ "%.2f"|format(data.payment or 0) }}
+                </td>
+                <td style="text-align: center; padding: 6px 8px;">
+                  {{ var_hours | round(2) }}
+                </td>
+                <td style="text-align: center; padding: 6px 8px;">
+                  {{ "%.2f"|format(data.payment or 0) }}
+                </td>
+                <td style="text-align: center; padding: 6px 8px;">-</td>
+                <td style="text-align: center; padding: 6px 8px;">{{ ((data.calc100 or 0) / 60) | round(2) if data.calc100 else '-' }}</td>
+                <td style="text-align: center; padding: 6px 8px;">{{ ((data.calc125 or 0) / 60) | round(2) if data.calc125 else '-' }}</td>
+                <td style="text-align: center; padding: 6px 8px;">{{ ((data.calc150 or 0) / 60) | round(2) if data.calc150 else '-' }}</td>
+                <td style="text-align: center; padding: 6px 8px;">{{ ((data.calc175 or 0) / 60) | round(2) if data.calc175 else '-' }}</td>
+                <td style="text-align: center; padding: 6px 8px;">{{ ((data.calc200 or 0) / 60) | round(2) if data.calc200 else '-' }}</td>
+              </tr>
+              {% endif %}
+              {% endfor %}
+
+              {# שורת חופשה - מוצגת רק אם יש #}
+              {% if (monthly_totals.vacation_payment or 0) > 0 %}
+              <tr style="background-color: #e8f5e9; font-weight: bold; border-top: 1px solid #ccc;">
+                <td colspan="3" style="text-align: right; padding: 6px 8px;">
+                  <strong>ימי חופשה:</strong>
+                </td>
+                <td style="text-align: center; padding: 6px 8px; font-weight: bold;">
+                  {{ "%.2f"|format(monthly_totals.vacation_payment or 0) }}
+                </td>
+                <td style="text-align: center; padding: 6px 8px;">
+                  {{ ((monthly_totals.vacation_minutes or 0) / 60) | round(2) }}
+                </td>
+                <td colspan="8" style="text-align: center; padding: 6px 8px; font-size: 0.85em;">
+                  {{ monthly_totals.vacation_days_taken or 0 }} ימים
+                </td>
+              </tr>
+              {% endif %}
+
+              {# שורת מחלה - מוצגת רק אם יש #}
+              {% if (monthly_totals.sick_payment or 0) > 0 %}
+              <tr style="background-color: #ffebee; font-weight: bold; border-top: 1px solid #ccc;">
+                <td colspan="3" style="text-align: right; padding: 6px 8px;">
+                  <strong>ימי מחלה:</strong>
+                </td>
+                <td style="text-align: center; padding: 6px 8px; font-weight: bold;">
+                  {{ "%.2f"|format(monthly_totals.sick_payment or 0) }}
+                </td>
+                <td style="text-align: center; padding: 6px 8px;">
+                  {{ ((monthly_totals.sick_minutes or 0) / 60) | round(2) }}
+                </td>
+                <td colspan="8" style="text-align: center; padding: 6px 8px; font-size: 0.85em;">
+                  {{ monthly_totals.sick_days_taken or 0 }} ימים (תשלום מדורג)
+                </td>
+              </tr>
+              {% endif %}
+
+              {# שורת נסיעות ותוספות - מוצגת רק אם יש #}
+              {% if (monthly_totals.travel or 0) > 0 or (monthly_totals.extras or 0) > 0 %}
+              <tr style="background-color: #f5f5dc; font-weight: bold; border-top: 1px solid #ccc;">
+                <td colspan="3" style="text-align: right; padding: 6px 8px;">
+                  <strong>נסיעות ותוספות:</strong>
+                </td>
+                <td style="text-align: center; padding: 6px 8px; font-weight: bold;">
+                  {{ "%.2f"|format((monthly_totals.travel or 0) + (monthly_totals.extras or 0)) }}
+                </td>
+                <td style="text-align: center; padding: 6px 8px;">-</td>
+                <td style="text-align: center; padding: 6px 8px;">-</td>
+                <td style="text-align: center; padding: 6px 8px;">-</td>
+                <td style="text-align: center; padding: 6px 8px;">-</td>
+                <td style="text-align: center; padding: 6px 8px;">-</td>
+                <td style="text-align: center; padding: 6px 8px;">-</td>
+                <td style="text-align: center; padding: 6px 8px;">-</td>
+                <td style="text-align: center; padding: 6px 8px;">-</td>
+                <td style="text-align: center; padding: 6px 8px; font-size: 0.85em;">
+                  {% if monthly_totals.travel %}נסיעות: {{ "%.2f"|format(monthly_totals.travel) }}{% endif %}
+                  {% if monthly_totals.travel and monthly_totals.extras %} | {% endif %}
+                  {% if monthly_totals.extras %}תוספות: {{ "%.2f"|format(monthly_totals.extras) }}{% endif %}
+                </td>
+              </tr>
+              {% endif %}
+
+              {# שורה סיכום כללי #}
               <tr style="background-color: #e0e0e0; font-weight: bold; border-top: 2px solid #000;">
                 <td colspan="3" style="text-align: right; padding: 6px 8px;">
                   <strong>סיכום כללי:</strong>
                 </td>
                 <td style="text-align: center; padding: 6px 8px; font-weight: bold;">
-                  {{ "%.2f"|format((monthly_totals.payment or 0) + (monthly_totals.travel or 0) + (monthly_totals.extras
+                  {{ "%.2f"|format((monthly_totals.payment or 0) + (monthly_totals.standby_payment or 0) + (monthly_totals.travel or 0) + (monthly_totals.extras
                   or 0)) }}
                 </td>
                 <td style="text-align: center; padding: 6px 8px;">
@@ -1127,8 +1221,6 @@
           <!-- טבלת פירוט רכיבי שכר -->
           <div style="background: #fff; border: 1px solid #e1e4e8; border-radius: 6px; padding: 12px;">
             <h3 style="margin: 0 0 8px; font-size: 14px; color: #24292e;">פירוט רכיבי שכר לתשלום</h3>
-            {% set total_cancelled = daily_segments | selectattr('cancelled_standbys') |
-            map(attribute='cancelled_standbys') | map('length') | sum %}
             <table style="width: 100%; font-size: 12px;">
               <thead>
                 <tr>
@@ -1163,11 +1255,11 @@
                     <td>{{ code.merav_code or '' }}</td>
 
                     {% if key == 'standby' %}
-                    {% set net_count = val - total_cancelled %}
-                    <td>{{ net_count }}</td>
+                    {# val (standby) כבר מייצג רק כוננויות ששולמו - לא צריך להחסיר cancelled #}
+                    <td>{{ val }}</td>
                     <td>
-                      {% if net_count > 0 %}
-                      {{ "%.2f"|format((monthly_totals.standby_payment or 0) / net_count) }} ₪
+                      {% if val > 0 %}
+                      {{ "%.2f"|format((monthly_totals.standby_payment or 0) / val) }} ₪
                       {% else %}
                       0.00 ₪
                       {% endif %}
@@ -1368,7 +1460,7 @@
                     <td></td>
                     <td>-</td>
                     <td>-</td>
-                    <td>{{ ((monthly_totals.payment or 0) + (monthly_totals.travel or 0) + (monthly_totals.extras or 0))
+                    <td>{{ ((monthly_totals.payment or 0) + (monthly_totals.standby_payment or 0) + (monthly_totals.travel or 0) + (monthly_totals.extras or 0))
                       | format_currency }}</td>
                   </tr>
               </tbody>

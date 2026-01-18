@@ -129,7 +129,7 @@
                     <td style="text-align: right; padding: 2px; background: #1e40af;">{% if grand_totals.standby_payment and grand_totals.standby_payment > 0 %}{{ "%.0f"|format(grand_totals.standby_payment) }}{% endif %}</td>
                     <td style="text-align: right; padding: 2px; background: #92400e;">{% if grand_totals.travel and grand_totals.travel > 0 %}{{ "%.0f"|format(grand_totals.travel) }}{% endif %}</td>
                     <td style="text-align: right; padding: 2px; background: #6b21a8;">{% if grand_totals.extras and grand_totals.extras > 0 %}{{ "%.0f"|format(grand_totals.extras) }}{% endif %}</td>
-                    <td style="background: #444; padding: 2px; text-align: right;">{{ "{:,.0f}".format(grand_totals.payment or 0) }}</td>
+                    <td style="background: #444; padding: 2px; text-align: right;">{{ "{:,.0f}".format(grand_totals.total_payment or 0) }}</td>
                 </tr>
             </tfoot>
         </table>

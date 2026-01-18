@@ -474,6 +474,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                st.for_shabbat_holiday,
                st.rate AS shift_rate,
                st.is_minimum_wage AS shift_is_minimum_wage,
+               st.is_special_hourly AS shift_is_special_hourly,
                ap.name AS apartment_name,
                ap.apartment_type_id,
                p.is_married,
@@ -529,11 +530,14 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             r_dict["is_married"] = historical_is_married
             
         # Override shift rate with historical value if available
+        # Only override if the historical rate is not None (otherwise keep current rate)
         shift_type_id = r_dict.get("shift_type_id")
         if shift_type_id and shift_type_id in shift_rates_cache:
             rate_info = shift_rates_cache[shift_type_id]
-            r_dict["shift_rate"] = rate_info.get("rate")
-            r_dict["shift_is_minimum_wage"] = rate_info.get("is_minimum_wage")
+            historical_rate = rate_info.get("rate")
+            if historical_rate is not None:
+                r_dict["shift_rate"] = historical_rate
+                r_dict["shift_is_minimum_wage"] = rate_info.get("is_minimum_wage")
             
         processed_reports.append(r_dict)
 
@@ -566,6 +570,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
     # This allows using custom rates for special shifts (like cleaning)
     shift_rates = {}
     shift_names_map = {}  # Map shift_id -> shift_name
+    shift_is_special_hourly = {}  # Map shift_id -> is_special_hourly (for variable rate tracking)
     shabbat_shifts = set()  # Track which shifts are Shabbat/holiday shifts
     for r in reports:
         shift_id = r.get("shift_type_id")
@@ -574,6 +579,8 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 shift_rates[shift_id] = get_effective_hourly_rate(r, minimum_wage)
             if shift_id not in shift_names_map:
                 shift_names_map[shift_id] = r.get("shift_name", "")
+            if shift_id not in shift_is_special_hourly:
+                shift_is_special_hourly[shift_id] = r.get("shift_is_special_hourly", False)
             if r.get("for_shabbat_holiday"):
                 shabbat_shifts.add(shift_id)
 
@@ -1306,6 +1313,8 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     "apartment_type_id": actual_apt_type,  # Use actual type for visual indicator
                     "shift_name": shift_name_str,
                     "shift_type": shift_type_label,
+                    "shift_id": sid,  # For identifying special shifts like medical escort
+                    "is_special_hourly": shift_is_special_hourly.get(sid, False),  # For variable rate tracking
                     "segments": [(start_str, end_str, label)],
                     "break_reason": "",
                     "from_prev_day": False,
@@ -1417,11 +1426,30 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
 
             total_minutes = sum(w[1]-w[0] for w in work_segments) + sum(v[1]-v[0] for v in vacation_segments) + sum(s[1]-s[0] for s in sick_segments)
 
-            # Add escort bonus minutes to calc100 and d_payment
+            # Add escort bonus minutes to calc100, d_payment, total_minutes, and the relevant chain
             bonus_mins = entry.get("escort_bonus_minutes", 0)
             if bonus_mins > 0:
-                d_calc100 += bonus_mins
-                d_payment += (bonus_mins / 60) * minimum_wage
+                # מציאת ה-chain של הליווי הרפואי ועדכון שלו
+                for chain in chains:
+                    if chain.get("type") == "work" and chain.get("total_minutes", 0) < 60:
+                        # משתמשים בתעריף האפקטיבי של ה-chain (לא בהכרח שכר מינימום)
+                        effective_rate = chain.get("effective_rate", minimum_wage)
+                        bonus_pay = (bonus_mins / 60) * effective_rate
+
+                        d_calc100 += bonus_mins
+                        d_payment += bonus_pay
+                        total_minutes += bonus_mins
+
+                        chain["total_minutes"] += bonus_mins
+                        chain["calc100"] += bonus_mins
+                        chain["payment"] += bonus_pay
+                        # עדכון פירוט המקטעים - שומרים על השעות המקוריות, רק מוסיפים הערה על הבונוס
+                        if chain.get("segments"):
+                            old_seg = chain["segments"][0]
+                            start_time = old_seg[0]
+                            end_time = old_seg[1]
+                            chain["segments"] = [(start_time, end_time, f"100% (כולל בונוס {bonus_mins} דק')")]
+                        break
 
             # Add partial payments from cancelled standbys (when standby > 70₪)
             cancelled_partial_pay = sum(c.get("partial_pay", 0) for c in cancelled_standbys)
@@ -1716,6 +1744,8 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     "apartment_type_id": display_apt_type,
                     "shift_name": shift_name_str,
                     "shift_type": shift_type_label,
+                    "shift_id": chain_shift_id,  # For identifying special shifts like medical escort
+                    "is_special_hourly": shift_is_special_hourly.get(chain_shift_id, False),  # For variable rate tracking
                     "segments": [(start_str, end_str, seg_label)],
                     "break_reason": break_reason if is_last else "",
                     "from_prev_day": (seg_start >= MINUTES_PER_DAY) if is_first else False,
@@ -1914,11 +1944,31 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
 
         chains.sort(key=chain_sort_key)
 
-        # Add escort bonus minutes to calc100 and d_payment
+        # Add escort bonus minutes to calc100, d_payment, total_minutes, and the relevant chain
         bonus_mins = entry.get("escort_bonus_minutes", 0)
         if bonus_mins > 0:
-            d_calc100 += bonus_mins
-            d_payment += (bonus_mins / 60) * minimum_wage
+            # מציאת ה-chain של הליווי הרפואי ועדכון שלו
+            # ה-chain הראשון של היום שהוא מסוג work עם פחות משעה הוא הליווי הרפואי
+            for chain in chains:
+                if chain.get("type") == "work" and chain.get("total_minutes", 0) < 60:
+                    # משתמשים בתעריף האפקטיבי של ה-chain (לא בהכרח שכר מינימום)
+                    effective_rate = chain.get("effective_rate", minimum_wage)
+                    bonus_pay = (bonus_mins / 60) * effective_rate
+
+                    d_calc100 += bonus_mins
+                    d_payment += bonus_pay
+                    total_minutes += bonus_mins
+
+                    chain["total_minutes"] += bonus_mins
+                    chain["calc100"] += bonus_mins
+                    chain["payment"] += bonus_pay
+                    # עדכון פירוט המקטעים - שומרים על השעות המקוריות, רק מוסיפים הערה על הבונוס
+                    if chain.get("segments"):
+                        old_seg = chain["segments"][0]
+                        start_time = old_seg[0]
+                        end_time = old_seg[1]
+                        chain["segments"] = [(start_time, end_time, f"100% (כולל בונוס {bonus_mins} דק')")]
+                    break
 
         # Add partial payments from cancelled standbys (when standby > 70₪)
         cancelled_partial_pay = sum(c.get("partial_pay", 0) for c in cancelled_standbys)
@@ -1935,7 +1985,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             "shift_names": shift_names,
             "has_work": len(work_segments) > 0,
             "total_minutes": total_minutes,
-            "total_minutes_no_standby": sum(w[1]-w[0] for w in work_segments),
+            "total_minutes_no_standby": sum(w[1]-w[0] for w in work_segments) + bonus_mins,
             "buckets": buckets,
             "chains": chains,
             "cancelled_standbys": cancelled_standbys,
@@ -2024,9 +2074,10 @@ def aggregate_daily_segments_to_monthly(
         # ימי עבודה
         "actual_work_days": 0,
 
-        # תעריף משתנה
+        # תעריף משתנה - מבנה חדש לתמיכה במספר תעריפים
         "variable_rate_value": minimum_wage,
         "variable_rate_extra_payment": 0.0,
+        "variable_rates": {},  # {rate_value: {calc100, calc125, calc150, calc175, calc200, payment}}
     }
 
     # ספירת ימי עבודה, חופשה ומחלה
@@ -2051,9 +2102,22 @@ def aggregate_daily_segments_to_monthly(
         for chain in day.get("chains", []):
             chain_type = chain.get("type", "work")
             effective_rate = chain.get("effective_rate", minimum_wage)
-            is_variable_rate = abs(effective_rate - minimum_wage) > 0.01
+
+            # תעריף משתנה = משמרת עם תעריף שעתי מיוחד (is_special_hourly),
+            # או תעריף שונה משכר מינימום
+            is_special_hourly = chain.get("is_special_hourly", False)
+            is_variable_rate = is_special_hourly or abs(effective_rate - minimum_wage) > 0.01
 
             if chain_type == "work":
+                # אתחול מילון לתעריף משתנה אם צריך
+                if is_variable_rate:
+                    rate_key = round(effective_rate, 2)
+                    if rate_key not in monthly_totals["variable_rates"]:
+                        monthly_totals["variable_rates"][rate_key] = {
+                            "calc100": 0, "calc125": 0, "calc150": 0,
+                            "calc175": 0, "calc200": 0, "payment": 0.0
+                        }
+
                 # שעות רגילות (100%)
                 c100 = chain.get("calc100", 0) or 0
                 if c100 > 0:
@@ -2061,6 +2125,9 @@ def aggregate_daily_segments_to_monthly(
                         monthly_totals["calc_variable"] += c100
                         monthly_totals["payment_calc_variable"] += (c100 / 60) * 1.0 * effective_rate
                         monthly_totals["variable_rate_value"] = effective_rate
+                        # שמירה גם במבנה החדש
+                        monthly_totals["variable_rates"][rate_key]["calc100"] += c100
+                        monthly_totals["variable_rates"][rate_key]["payment"] += (c100 / 60) * 1.0 * effective_rate
                     else:
                         monthly_totals["calc100"] += c100
                         monthly_totals["payment_calc100"] += (c100 / 60) * 1.0 * effective_rate
@@ -2072,6 +2139,9 @@ def aggregate_daily_segments_to_monthly(
                         monthly_totals["calc_variable"] += c125
                         monthly_totals["payment_calc_variable"] += (c125 / 60) * 1.25 * effective_rate
                         monthly_totals["variable_rate_value"] = effective_rate
+                        # שמירה גם במבנה החדש
+                        monthly_totals["variable_rates"][rate_key]["calc125"] += c125
+                        monthly_totals["variable_rates"][rate_key]["payment"] += (c125 / 60) * 1.25 * effective_rate
                     else:
                         monthly_totals["calc125"] += c125
                         monthly_totals["payment_calc125"] += (c125 / 60) * 1.25 * effective_rate
@@ -2086,6 +2156,9 @@ def aggregate_daily_segments_to_monthly(
                         monthly_totals["calc_variable"] += c150
                         monthly_totals["payment_calc_variable"] += (c150 / 60) * 1.5 * effective_rate
                         monthly_totals["variable_rate_value"] = effective_rate
+                        # שמירה גם במבנה החדש
+                        monthly_totals["variable_rates"][rate_key]["calc150"] += c150
+                        monthly_totals["variable_rates"][rate_key]["payment"] += (c150 / 60) * 1.5 * effective_rate
                     else:
                         monthly_totals["calc150"] += c150
                         monthly_totals["payment_calc150"] += (c150 / 60) * 1.5 * effective_rate
@@ -2107,6 +2180,9 @@ def aggregate_daily_segments_to_monthly(
                         monthly_totals["calc_variable"] += c175
                         monthly_totals["payment_calc_variable"] += (c175 / 60) * 1.75 * effective_rate
                         monthly_totals["variable_rate_value"] = effective_rate
+                        # שמירה גם במבנה החדש
+                        monthly_totals["variable_rates"][rate_key]["calc175"] += c175
+                        monthly_totals["variable_rates"][rate_key]["payment"] += (c175 / 60) * 1.75 * effective_rate
                     else:
                         monthly_totals["calc175"] += c175
                         monthly_totals["payment_calc175"] += (c175 / 60) * 1.75 * effective_rate
@@ -2118,6 +2194,9 @@ def aggregate_daily_segments_to_monthly(
                         monthly_totals["calc_variable"] += c200
                         monthly_totals["payment_calc_variable"] += (c200 / 60) * 2.0 * effective_rate
                         monthly_totals["variable_rate_value"] = effective_rate
+                        # שמירה גם במבנה החדש
+                        monthly_totals["variable_rates"][rate_key]["calc200"] += c200
+                        monthly_totals["variable_rates"][rate_key]["payment"] += (c200 / 60) * 2.0 * effective_rate
                     else:
                         monthly_totals["calc200"] += c200
                         monthly_totals["payment_calc200"] += (c200 / 60) * 2.0 * effective_rate

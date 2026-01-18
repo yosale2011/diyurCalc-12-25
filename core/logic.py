@@ -207,7 +207,7 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
         if monthly_totals.get("total_payment", 0) > 0 or monthly_totals.get("total_hours", 0) > 0:
             summary_data.append({"name": p["name"], "person_id": p["id"], "merav_code": p["meirav_code"], "totals": monthly_totals})
 
-            grand_totals["payment"] += monthly_totals.get("total_payment", 0)
+            grand_totals["payment"] += monthly_totals.get("payment", 0)
             grand_totals["total_payment"] += monthly_totals.get("total_payment", 0)
 
             for k, v in monthly_totals.items():
