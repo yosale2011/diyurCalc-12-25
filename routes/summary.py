@@ -17,10 +17,14 @@ from core.logic import (
     get_payment_codes,
     calculate_monthly_summary,
 )
+from utils.utils import format_currency, human_date
 import logging
 
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
+templates.env.filters["format_currency"] = format_currency
+templates.env.filters["human_date"] = human_date
+templates.env.globals["app_version"] = config.VERSION
 
 
 def general_summary(

@@ -801,20 +801,20 @@ def run_real_data_tests():
         print("\n" + "-"*50)
         print("בדיקה 1: ברהמי רחל - דצמבר 2025")
         print("-"*50)
-        test_worker_calculation(conn, "ברהמי רחל", 2025, 12)
+        _manual_test_worker_calculation(conn, "ברהמי רחל", 2025, 12)
 
         # בדיקה 2: בדיקת יום ספציפי עם משמרות חופפות
         print("\n" + "-"*50)
         print("בדיקה 2: ברהמי רחל - 18/12/2025 (משמרות חופפות)")
         print("-"*50)
-        test_specific_day(conn, "ברהמי רחל", date(2025, 12, 18))
+        _manual_test_specific_day(conn, "ברהמי רחל", date(2025, 12, 18))
 
     finally:
         return_connection(conn)
 
 
-def test_worker_calculation(conn, worker_name: str, year: int, month: int):
-    """בדיקת חישוב לעובד ספציפי"""
+def _manual_test_worker_calculation(conn, worker_name: str, year: int, month: int):
+    """בדיקת חישוב לעובד ספציפי - להרצה ידנית עם DB אמיתי (לא pytest)"""
 
     from core.logic import calculate_person_monthly_totals
 
@@ -849,8 +849,8 @@ def test_worker_calculation(conn, worker_name: str, year: int, month: int):
     print(f"  תשלום כוננות: {result.get('standby_payment', 0):.2f} ש\"ח")
 
 
-def test_specific_day(conn, worker_name: str, test_date: date):
-    """בדיקת יום ספציפי עם פירוט מלא - מציג דיווחים גולמיים"""
+def _manual_test_specific_day(conn, worker_name: str, test_date: date):
+    """בדיקת יום ספציפי עם פירוט מלא - להרצה ידנית עם DB אמיתי (לא pytest)"""
 
     # מציאת העובד
     cursor = conn.cursor()

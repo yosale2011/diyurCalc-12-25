@@ -13,10 +13,14 @@ from core.config import config
 from core.database import get_conn
 from core.logic import get_payment_codes
 from scripts.db_sync import sync_database, check_demo_database_status
+from utils.utils import format_currency, human_date
 
 logger = logging.getLogger(__name__)
 
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
+templates.env.filters["format_currency"] = format_currency
+templates.env.filters["human_date"] = human_date
+templates.env.globals["app_version"] = config.VERSION
 
 
 def manage_payment_codes(request: Request) -> HTMLResponse:

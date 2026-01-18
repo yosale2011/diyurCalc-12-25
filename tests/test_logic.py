@@ -11,7 +11,8 @@ import os
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from app_utils import calculate_wage_rate
+from app_utils import calculate_wage_rate, get_effective_hourly_rate
+from core.sick_days import get_sick_payment_rate
 from core.time_utils import (
     minutes_to_time_str,
     span_minutes,
@@ -135,21 +136,39 @@ class TestTimeUtilities(unittest.TestCase):
         self.assertEqual(minutes_to_time_str(1439), "23:59")
 
     def test_parse_hhmm(self):
-        """Test parsing HH:MM to minutes."""
-        self.assertEqual(parse_hhmm("00:00"), 0)
-        self.assertEqual(parse_hhmm("01:00"), 60)
-        self.assertEqual(parse_hhmm("08:30"), 510)
-        self.assertEqual(parse_hhmm("23:59"), 1439)
+        """Test parsing HH:MM to (hours, minutes) tuple."""
+        # parse_hhmm returns (hours, minutes) tuple, not total minutes
+        self.assertEqual(parse_hhmm("00:00"), (0, 0))
+        self.assertEqual(parse_hhmm("01:00"), (1, 0))
+        self.assertEqual(parse_hhmm("08:30"), (8, 30))
+        self.assertEqual(parse_hhmm("23:59"), (23, 59))
 
     def test_span_minutes(self):
-        """Test calculating span between times."""
-        # Same day
-        self.assertEqual(span_minutes("08:00", "16:00"), 480)
-        self.assertEqual(span_minutes("09:30", "17:45"), 495)
+        """Test calculating span between times - returns (start_min, end_min) tuple."""
+        # span_minutes returns (start_minutes, end_minutes) tuple, not duration
+        # Same day: 08:00 = 480, 16:00 = 960
+        start, end = span_minutes("08:00", "16:00")
+        self.assertEqual(start, 480)
+        self.assertEqual(end, 960)
+        self.assertEqual(end - start, 480)  # Duration is 8 hours
 
-        # Cross midnight
-        self.assertEqual(span_minutes("22:00", "06:00"), 480)
-        self.assertEqual(span_minutes("23:00", "01:00"), 120)
+        # 09:30 = 570, 17:45 = 1065
+        start, end = span_minutes("09:30", "17:45")
+        self.assertEqual(start, 570)
+        self.assertEqual(end, 1065)
+        self.assertEqual(end - start, 495)  # Duration is 8:15
+
+        # Cross midnight: 22:00 = 1320, 06:00 = 360 -> becomes 1800 (360 + 1440)
+        start, end = span_minutes("22:00", "06:00")
+        self.assertEqual(start, 1320)
+        self.assertEqual(end, 1800)  # 360 + 1440 for overnight
+        self.assertEqual(end - start, 480)  # Duration is 8 hours
+
+        # 23:00 = 1380, 01:00 = 60 -> becomes 1500 (60 + 1440)
+        start, end = span_minutes("23:00", "01:00")
+        self.assertEqual(start, 1380)
+        self.assertEqual(end, 1500)  # 60 + 1440 for overnight
+        self.assertEqual(end - start, 120)  # Duration is 2 hours
 
     # def test_format_hours_minutes(self):
     #     """Test formatting minutes to HH:MM."""
@@ -187,6 +206,63 @@ class TestOverlapCalculations(unittest.TestCase):
 
         # One range contains the other
         self.assertEqual(overlap_minutes(480, 720, 540, 600), 60)
+
+
+class TestSickPaymentRate(unittest.TestCase):
+    """Test sick day payment rate calculations."""
+
+    def test_first_day_zero_percent(self):
+        """Test that first sick day pays 0%."""
+        self.assertEqual(get_sick_payment_rate(1), 0.0)
+
+    def test_days_2_3_fifty_percent(self):
+        """Test that days 2-3 pay 50%."""
+        self.assertEqual(get_sick_payment_rate(2), 0.5)
+        self.assertEqual(get_sick_payment_rate(3), 0.5)
+
+    def test_day_4_plus_full_payment(self):
+        """Test that day 4 and beyond pay 100%."""
+        self.assertEqual(get_sick_payment_rate(4), 1.0)
+        self.assertEqual(get_sick_payment_rate(5), 1.0)
+        self.assertEqual(get_sick_payment_rate(10), 1.0)
+        self.assertEqual(get_sick_payment_rate(30), 1.0)
+
+
+class TestEffectiveHourlyRate(unittest.TestCase):
+    """Test effective hourly rate calculation."""
+
+    def test_custom_rate_used(self):
+        """Test that custom shift rate is used when provided."""
+        # shift_rate is stored in agorot (1/100 of shekel)
+        report = {'shift_rate': 5000}  # 50.00 shekels/hour
+        minimum_wage = 32.30
+        self.assertEqual(get_effective_hourly_rate(report, minimum_wage), 50.0)
+
+    def test_minimum_wage_when_no_rate(self):
+        """Test that minimum wage is used when no shift rate."""
+        report = {}
+        minimum_wage = 32.30
+        self.assertEqual(get_effective_hourly_rate(report, minimum_wage), 32.30)
+
+    def test_minimum_wage_when_rate_none(self):
+        """Test that minimum wage is used when shift_rate is None."""
+        report = {'shift_rate': None}
+        minimum_wage = 32.30
+        self.assertEqual(get_effective_hourly_rate(report, minimum_wage), 32.30)
+
+    def test_minimum_wage_when_rate_zero(self):
+        """Test that minimum wage is used when shift_rate is 0."""
+        report = {'shift_rate': 0}
+        minimum_wage = 32.30
+        self.assertEqual(get_effective_hourly_rate(report, minimum_wage), 32.30)
+
+    def test_rate_conversion_from_agorot(self):
+        """Test that shift_rate is correctly converted from agorot to shekels."""
+        # 3230 agorot = 32.30 shekels
+        report = {'shift_rate': 3230}
+        minimum_wage = 30.0
+        self.assertEqual(get_effective_hourly_rate(report, minimum_wage), 32.30)
+
 
     # def test_overlap_percentage(self):
     #     """Test calculating overlap percentage."""
@@ -249,7 +325,8 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestVacationCalculations))
     suite.addTests(loader.loadTestsFromTestCase(TestTimeUtilities))
     suite.addTests(loader.loadTestsFromTestCase(TestOverlapCalculations))
-    suite.addTests(loader.loadTestsFromTestCase(TestShabbatDetection))
+    suite.addTests(loader.loadTestsFromTestCase(TestSickPaymentRate))
+    suite.addTests(loader.loadTestsFromTestCase(TestEffectiveHourlyRate))
     # suite.addTests(loader.loadTestsFromTestCase(TestValidation))
 
     # Run tests

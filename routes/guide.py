@@ -22,11 +22,14 @@ from core.logic import (
 from core.history import get_minimum_wage_for_month
 from app_utils import get_daily_segments_data, aggregate_daily_segments_to_monthly
 from core.constants import is_implicit_tagbur, FRIDAY_SHIFT_ID, SHABBAT_SHIFT_ID
-from utils.utils import month_range_ts
+from utils.utils import month_range_ts, format_currency, human_date
 import psycopg2.extras
 
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
+templates.env.filters["format_currency"] = format_currency
+templates.env.filters["human_date"] = human_date
+templates.env.globals["app_version"] = config.VERSION
 
 
 def simple_summary_view(
