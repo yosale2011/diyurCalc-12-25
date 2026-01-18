@@ -13,7 +13,7 @@ from core.time_utils import (
     WORK_DAY_START_MINUTES,
     span_minutes, to_local_date, minutes_to_time_str
 )
-from utils.utils import overlap_minutes
+from utils.utils import overlap_minutes, merge_intervals, find_uncovered_intervals
 
 logger = logging.getLogger(__name__)
 
@@ -441,24 +441,9 @@ def _build_daily_map(
                 remaining = total_part_minutes - minutes_covered
 
                 if remaining > 0:
-                    # מיון ומיזוג אינטרוולים חופפים
-                    covered_intervals.sort()
-                    merged_covered = []
-                    for interval in covered_intervals:
-                        if merged_covered and interval[0] <= merged_covered[-1][1]:
-                            merged_covered[-1] = (merged_covered[-1][0], max(merged_covered[-1][1], interval[1]))
-                        else:
-                            merged_covered.append(interval)
-
-                    # מציאת ה"חורים" - זמנים לא מכוסים
-                    uncovered_intervals = []
-                    current_pos = s_start
-                    for cov_start, cov_end in merged_covered:
-                        if current_pos < cov_start:
-                            uncovered_intervals.append((current_pos, cov_start))
-                        current_pos = max(current_pos, cov_end)
-                    if current_pos < s_end:
-                        uncovered_intervals.append((current_pos, s_end))
+                    # מיזוג אינטרוולים חופפים ומציאת זמנים לא מכוסים
+                    merged_covered = merge_intervals(covered_intervals)
+                    uncovered_intervals = find_uncovered_intervals(merged_covered, s_start, s_end)
 
                     # יצירת סגמנטי עבודה לכל זמן לא מכוסה
                     segment_id = None

@@ -54,9 +54,6 @@ from core.wage_calculator import (
     _calculate_chain_wages,
 )
 
-# Month availability functions - now in utils
-from utils.utils import available_months, available_months_from_db
-
 # =============================================================================
 # Configure logging
 # =============================================================================

@@ -377,7 +377,6 @@ def _process_daily_map(
     Returns:
         (day_totals, work_days_set, vacation_days_set)
     """
-    from utils.utils import calculate_accruals
     WORK_DAY_CUTOFF = 480  # 08:00
 
     totals = {

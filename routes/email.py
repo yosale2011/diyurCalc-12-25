@@ -21,14 +21,10 @@ from services.email_service import (
     send_guide_email,
     send_all_guides_email,
 )
-from utils.utils import human_date, format_currency
 
 logger = logging.getLogger(__name__)
 
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
-templates.env.filters["human_date"] = human_date
-templates.env.filters["format_currency"] = format_currency
-templates.env.globals["app_version"] = config.VERSION
 
 
 def email_settings_page(request: Request) -> HTMLResponse:

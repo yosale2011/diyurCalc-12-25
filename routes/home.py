@@ -13,17 +13,11 @@ from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from core.config import config
 from core.database import get_conn
-from core.logic import (
-    available_months_from_db,
-    get_active_guides,
-)
-from utils.utils import month_range_ts, human_date, format_currency
+from core.logic import get_active_guides
+from utils.utils import month_range_ts, available_months_from_db
 
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
-templates.env.filters["human_date"] = human_date
-templates.env.filters["format_currency"] = format_currency
-templates.env.globals["app_version"] = config.VERSION
 
 
 def home(

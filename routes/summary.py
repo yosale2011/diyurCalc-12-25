@@ -17,14 +17,10 @@ from core.logic import (
     get_payment_codes,
     calculate_monthly_summary,
 )
-from utils.utils import human_date, format_currency
 import logging
 
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
-templates.env.filters["human_date"] = human_date
-templates.env.filters["format_currency"] = format_currency
-templates.env.globals["app_version"] = config.VERSION
 
 
 def general_summary(
@@ -43,15 +39,6 @@ def general_summary(
         year = now.year
     if month is None:
         month = now.month
-
-    # חישוב טווח התאריכים לחודש הנבחר (לשליפת רכיבי תשלום)
-    month_start = datetime(year, month, 1, tzinfo=config.LOCAL_TZ)
-    if month == 12:
-        month_end = datetime(year + 1, 1, 1, tzinfo=config.LOCAL_TZ)
-    else:
-        month_end = datetime(year, month + 1, 1, tzinfo=config.LOCAL_TZ)
-    month_start_ts = int(month_start.timestamp())
-    month_end_ts = int(month_end.timestamp())
 
     conn_start = time.time()
     with get_conn() as conn:

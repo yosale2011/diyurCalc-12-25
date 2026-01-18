@@ -14,12 +14,8 @@ from fastapi.templating import Jinja2Templates
 from core.config import config
 from core.database import get_conn
 from services import gesher_exporter
-from utils.utils import human_date, format_currency
 
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
-templates.env.filters["human_date"] = human_date
-templates.env.filters["format_currency"] = format_currency
-templates.env.globals["app_version"] = config.VERSION
 
 
 def export_gesher(

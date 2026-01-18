@@ -136,6 +136,100 @@ def overlap_minutes(a_start: int, a_end: int, b_start: int, b_end: int) -> int:
     return max(0, min(a_end, b_end) - max(a_start, b_start))
 
 
+def merge_intervals(intervals: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+    """
+    מיזוג אינטרוולים חופפים או צמודים.
+
+    Args:
+        intervals: רשימת (start, end) tuples
+
+    Returns:
+        רשימה ממוזגת של intervals
+    """
+    if not intervals:
+        return []
+
+    sorted_intervals = sorted(intervals)
+    merged = []
+
+    for start, end in sorted_intervals:
+        if merged and start <= merged[-1][1]:
+            # מיזוג עם הקודם
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+
+    return merged
+
+
+def find_uncovered_intervals(
+    covered: List[Tuple[int, int]],
+    range_start: int,
+    range_end: int
+) -> List[Tuple[int, int]]:
+    """
+    מציאת חורים (intervals לא מכוסים) בטווח נתון.
+
+    Args:
+        covered: רשימת intervals מכוסים (כבר ממוזגים)
+        range_start: תחילת הטווח הכולל
+        range_end: סוף הטווח הכולל
+
+    Returns:
+        רשימת intervals שלא מכוסים
+    """
+    uncovered = []
+    current_pos = range_start
+
+    for cov_start, cov_end in covered:
+        if current_pos < cov_start:
+            uncovered.append((current_pos, cov_start))
+        current_pos = max(current_pos, cov_end)
+
+    if current_pos < range_end:
+        uncovered.append((current_pos, range_end))
+
+    return uncovered
+
+
+def trim_segment_by_work(
+    segment: Tuple[int, int],
+    work_intervals: List[Tuple[int, int]]
+) -> List[Tuple[int, int]]:
+    """
+    חיתוך סגמנט על ידי הפחתת זמני עבודה.
+
+    כשעבודה חופפת לכוננות, מחזיר את החלקים שנשארו מהכוננות.
+
+    Args:
+        segment: (start, end) של הסגמנט המקורי
+        work_intervals: רשימת (start, end) של עבודות לחיתוך
+
+    Returns:
+        רשימת (start, end) של החלקים שנותרו
+    """
+    remaining = [segment]
+
+    for work_start, work_end in work_intervals:
+        new_remaining = []
+        for rem_start, rem_end in remaining:
+            inter_start = max(rem_start, work_start)
+            inter_end = min(rem_end, work_end)
+
+            if inter_start < inter_end:
+                # יש חפיפה - צריך לחתוך
+                if rem_start < inter_start:
+                    new_remaining.append((rem_start, inter_start))
+                if inter_end < rem_end:
+                    new_remaining.append((inter_end, rem_end))
+            else:
+                # אין חפיפה - להשאיר כמו שזה
+                new_remaining.append((rem_start, rem_end))
+        remaining = new_remaining
+
+    return remaining
+
+
 def to_gematria(num: int) -> str:
     """Simple gematria converter for numbers 1-31 and years."""
     if num <= 0:

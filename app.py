@@ -25,8 +25,7 @@ from core.database import set_demo_mode, get_demo_mode_from_cookie, is_demo_mode
 from core.logic import (
     calculate_person_monthly_totals,
 )
-from utils.utils import human_date
-from utils.utils import calculate_accruals, format_currency
+from utils.utils import human_date, format_currency
 from routes.home import home
 from routes.guide import simple_summary_view, guide_view
 from routes.admin import (

@@ -313,35 +313,6 @@ def unlock_month(conn, year: int, month: int, unlocked_by: int) -> bool:
         cursor.close()
 
 
-def get_historical_months(conn, person_id: int = None) -> list:
-    """
-    Get list of months that have historical data.
-    Useful for debugging or viewing history.
-
-    Returns:
-        List of (year, month) tuples
-    """
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    try:
-        if person_id:
-            cursor.execute("""
-                SELECT DISTINCT year, month
-                FROM person_status_history
-                WHERE person_id = %s
-                ORDER BY year DESC, month DESC
-            """, (person_id,))
-        else:
-            cursor.execute("""
-                SELECT DISTINCT year, month
-                FROM person_status_history
-                ORDER BY year DESC, month DESC
-            """)
-
-        return [(row["year"], row["month"]) for row in cursor.fetchall()]
-    finally:
-        cursor.close()
-
-
 # ============================================================================
 # Shift Types History Functions
 # ============================================================================
@@ -508,93 +479,6 @@ def get_all_shift_rates_for_month(conn, year: int, month: int) -> dict:
 # ============================================================================
 # Shift Time Segments History Functions
 # ============================================================================
-
-def get_segments_for_shift_month(
-    conn,
-    shift_type_id: int,
-    year: int,
-    month: int
-) -> list:
-    """
-    Get shift time segments for a specific month.
-    First checks history table using "valid until" logic, falls back to current data.
-    
-    History records store (year, month) as "valid until" - meaning the old value
-    was valid up to but NOT including that month.
-
-    Returns:
-        list of dicts with keys: id, shift_type_id, start_time, end_time,
-                                 wage_percent, segment_type, order_index
-    """
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    try:
-        # Find historical records where the requested month is covered
-        # We need to find the earliest "valid until" that covers our month
-        cursor.execute("""
-            SELECT DISTINCT year, month
-            FROM shift_time_segments_history
-            WHERE shift_type_id = %s
-              AND (year > %s OR (year = %s AND month > %s))
-            ORDER BY year ASC, month ASC
-            LIMIT 1
-        """, (shift_type_id, year, year, month))
-        
-        valid_until = cursor.fetchone()
-        
-        if valid_until:
-            # Get segments for this valid_until period
-            cursor.execute("""
-                SELECT segment_id as id, shift_type_id, start_time, end_time,
-                       wage_percent, segment_type, order_index
-                FROM shift_time_segments_history
-                WHERE shift_type_id = %s AND year = %s AND month = %s
-                ORDER BY order_index
-            """, (shift_type_id, valid_until["year"], valid_until["month"]))
-            
-            history = cursor.fetchall()
-            if history:
-                logger.debug(f"Using historical segments for shift_type {shift_type_id} ({year}/{month})")
-                return [dict(row) for row in history]
-
-        # No history covers this month - use current data from shift_time_segments table
-        cursor.execute("""
-            SELECT id, shift_type_id, start_time, end_time,
-                   wage_percent, segment_type, order_index
-            FROM shift_time_segments
-            WHERE shift_type_id = %s
-            ORDER BY order_index
-        """, (shift_type_id,))
-
-        return [dict(row) for row in cursor.fetchall()]
-    finally:
-        cursor.close()
-
-
-def get_all_segments_for_month(conn, shift_type_ids: list, year: int, month: int) -> dict:
-    """
-    Get all shift time segments for multiple shift types for a specific month.
-    Uses "valid until" logic: for each shift type, finds historical data that covers
-    the requested month, falls back to current data.
-
-    Args:
-        shift_type_ids: List of shift type IDs to get segments for
-
-    Returns:
-        dict mapping shift_type_id to list of segment dicts
-    """
-    if not shift_type_ids:
-        return {}
-
-    result = {}
-    
-    # For each shift type, get segments using "valid until" logic
-    for shift_type_id in shift_type_ids:
-        segments = get_segments_for_shift_month(conn, shift_type_id, year, month)
-        if segments:
-            result[shift_type_id] = segments
-
-    return result
-
 
 def save_segment_to_history(
     conn,

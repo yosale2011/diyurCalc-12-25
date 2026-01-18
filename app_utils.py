@@ -1,13 +1,17 @@
 
 from typing import Dict, List, Tuple, Any, Optional
 from datetime import datetime, timedelta, date
-from core.logic import (
-    MINUTES_PER_HOUR, MINUTES_PER_DAY, BREAK_THRESHOLD_MINUTES,
-    STANDBY_CANCEL_OVERLAP_THRESHOLD, DEFAULT_STANDBY_RATE, LOCAL_TZ,
-    span_minutes, to_local_date, is_shabbat_time, calculate_wage_rate,
-    get_standby_rate, _calculate_chain_wages
+from core.time_utils import (
+    MINUTES_PER_HOUR, MINUTES_PER_DAY, LOCAL_TZ,
+    span_minutes, to_local_date, is_shabbat_time,
 )
-from utils.utils import overlap_minutes, to_gematria, month_range_ts
+from core.segments import BREAK_THRESHOLD_MINUTES
+from core.wage_calculator import (
+    STANDBY_CANCEL_OVERLAP_THRESHOLD, DEFAULT_STANDBY_RATE,
+    _calculate_chain_wages,
+)
+from core.logic import get_standby_rate
+from utils.utils import overlap_minutes, to_gematria, month_range_ts, merge_intervals, find_uncovered_intervals
 from convertdate import hebrew
 import logging
 
@@ -68,7 +72,6 @@ def get_effective_hourly_rate(report, minimum_wage: float) -> float:
         if rate > 0:
             return rate
         # Invalid rate - log warning and fall back to minimum wage
-        import logging
         logging.warning(f"Invalid shift_rate {shift_rate} for shift, using minimum wage")
 
     return minimum_wage
@@ -685,24 +688,9 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 remaining = total_part_minutes - minutes_covered
 
                 if remaining > 0:
-                    # מיון ומיזוג אינטרוולים חופפים (covered_intervals נאסף בלולאה הראשית)
-                    covered_intervals.sort()
-                    merged_covered = []
-                    for interval in covered_intervals:
-                        if merged_covered and interval[0] <= merged_covered[-1][1]:
-                            merged_covered[-1] = (merged_covered[-1][0], max(merged_covered[-1][1], interval[1]))
-                        else:
-                            merged_covered.append(interval)
-
-                    # מציאת ה"חורים" - זמנים לא מכוסים
-                    uncovered_intervals = []
-                    current_pos = s_start
-                    for cov_start, cov_end in merged_covered:
-                        if current_pos < cov_start:
-                            uncovered_intervals.append((current_pos, cov_start))
-                        current_pos = max(current_pos, cov_end)
-                    if current_pos < s_end:
-                        uncovered_intervals.append((current_pos, s_end))
+                    # מיזוג אינטרוולים חופפים ומציאת זמנים לא מכוסים
+                    merged_covered = merge_intervals(covered_intervals)
+                    uncovered_intervals = find_uncovered_intervals(merged_covered, s_start, s_end)
 
                     # יצירת סגמנטי עבודה לכל זמן לא מכוסה
                     segment_id = None

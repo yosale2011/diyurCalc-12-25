@@ -12,15 +12,11 @@ from fastapi.templating import Jinja2Templates
 from core.config import config
 from core.database import get_conn
 from core.logic import get_payment_codes
-from utils.utils import human_date, format_currency
 from scripts.db_sync import sync_database, check_demo_database_status
 
 logger = logging.getLogger(__name__)
 
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
-templates.env.filters["human_date"] = human_date
-templates.env.filters["format_currency"] = format_currency
-templates.env.globals["app_version"] = config.VERSION
 
 
 def manage_payment_codes(request: Request) -> HTMLResponse:
