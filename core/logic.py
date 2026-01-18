@@ -14,7 +14,6 @@ from typing import List, Tuple, Dict, Any
 
 from utils.cache_manager import cached
 from core.time_utils import get_shabbat_times_cache
-from core.constants import DEFAULT_STANDBY_RATE
 
 # =============================================================================
 # Configure logging
@@ -25,52 +24,6 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # Data Access Functions (with caching)
 # =============================================================================
-
-
-def get_standby_rate(conn, segment_id: int, apartment_type_id: int | None, is_married: bool, year: int = None, month: int = None) -> float:
-    """
-    Get standby rate from standby_rates table.
-    Priority: specific apartment_type (priority=10) > general (priority=0)
-    If year/month provided, checks historical rates first.
-    """
-    marital_status = "married" if is_married else "single"
-
-    # If year/month provided, try historical rates first
-    if year is not None and month is not None:
-        from core.history import get_standby_rate_for_month
-        historical_amount = get_standby_rate_for_month(
-            conn, segment_id, apartment_type_id, marital_status, year, month
-        )
-        if historical_amount is not None:
-            return float(historical_amount) / 100
-
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-
-    # First try specific rate for apartment type (priority=10)
-    if apartment_type_id is not None:
-        cursor.execute("""
-            SELECT amount FROM standby_rates
-            WHERE segment_id = %s AND apartment_type_id = %s AND marital_status = %s AND priority = 10
-            LIMIT 1
-        """, (segment_id, apartment_type_id, marital_status))
-        row = cursor.fetchone()
-        if row:
-            cursor.close()
-            return float(row["amount"]) / 100
-
-    # Fallback to general rate (priority=0)
-    cursor.execute("""
-        SELECT amount FROM standby_rates
-        WHERE segment_id = %s AND apartment_type_id IS NULL AND marital_status = %s AND priority = 0
-        LIMIT 1
-    """, (segment_id, marital_status))
-    row = cursor.fetchone()
-    cursor.close()
-
-    if row:
-        return float(row["amount"]) / 100
-
-    return DEFAULT_STANDBY_RATE
 
 
 @cached(ttl=1800)  # Cache for 30 minutes

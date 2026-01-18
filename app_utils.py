@@ -7,15 +7,16 @@ from core.time_utils import (
     FRIDAY, SATURDAY,
     span_minutes, to_local_date, _get_shabbat_boundaries,
 )
-from core.logic import get_standby_rate
 from utils.utils import overlap_minutes, to_gematria, month_range_ts, merge_intervals, find_uncovered_intervals
 from convertdate import hebrew
 import logging
+import psycopg2.extras
 
 from core.history import (
     get_apartment_type_for_month, get_person_status_for_month,
     get_all_shift_rates_for_month
 )
+from core.sick_days import _identify_sick_day_sequences, get_sick_payment_rate
 
 # =============================================================================
 # Import constants from single source of truth (core/constants.py)
@@ -51,6 +52,56 @@ from core.constants import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Data Access Functions (moved from core/logic.py to fix circular dependency)
+# =============================================================================
+
+def get_standby_rate(conn, segment_id: int, apartment_type_id: int | None, is_married: bool, year: int = None, month: int = None) -> float:
+    """
+    Get standby rate from standby_rates table.
+    Priority: specific apartment_type (priority=10) > general (priority=0)
+    If year/month provided, checks historical rates first.
+    """
+    marital_status = "married" if is_married else "single"
+
+    # If year/month provided, try historical rates first
+    if year is not None and month is not None:
+        from core.history import get_standby_rate_for_month
+        historical_amount = get_standby_rate_for_month(
+            conn, segment_id, apartment_type_id, marital_status, year, month
+        )
+        if historical_amount is not None:
+            return float(historical_amount) / 100
+
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
+    # First try specific rate for apartment type (priority=10)
+    if apartment_type_id is not None:
+        cursor.execute("""
+            SELECT amount FROM standby_rates
+            WHERE segment_id = %s AND apartment_type_id = %s AND marital_status = %s AND priority = 10
+            LIMIT 1
+        """, (segment_id, apartment_type_id, marital_status))
+        row = cursor.fetchone()
+        if row:
+            cursor.close()
+            return float(row["amount"]) / 100
+
+    # Fallback to general rate (priority=0)
+    cursor.execute("""
+        SELECT amount FROM standby_rates
+        WHERE segment_id = %s AND apartment_type_id IS NULL AND marital_status = %s AND priority = 0
+        LIMIT 1
+    """, (segment_id, marital_status))
+    row = cursor.fetchone()
+    cursor.close()
+
+    if row:
+        return float(row["amount"]) / 100
+
+    return DEFAULT_STANDBY_RATE
 
 
 # =============================================================================
@@ -401,80 +452,6 @@ def get_effective_hourly_rate(report, minimum_wage: float) -> float:
         logging.warning(f"Invalid shift_rate {shift_rate} for shift, using minimum wage")
 
     return minimum_wage
-
-
-def _identify_sick_day_sequences(reports: List[Dict]) -> Dict[date, int]:
-    """
-    זיהוי רצפי ימי מחלה וקביעת מספר היום ברצף לכל תאריך.
-
-    לפי חוק דמי מחלה:
-    - יום ראשון: 0% תשלום
-    - ימים 2-3: 50% תשלום
-    - מיום 4 והלאה: 100% תשלום
-
-    תאריכים רצופים (כולל ימי מנוחה) נחשבים כרצף אחד.
-    הפסקה של יותר מיום אחד מתחילה רצף חדש.
-
-    Args:
-        reports: רשימת דיווחים מהדאטבייס
-
-    Returns:
-        מילון {תאריך: מספר_יום_מחלה} (1, 2, 3, 4...)
-    """
-    # איסוף כל התאריכים שיש בהם דיווח מחלה
-    sick_dates = set()
-    for r in reports:
-        shift_name = r.get("shift_name") or ""
-        if "מחלה" in shift_name:
-            r_date = r.get("date")
-            if r_date:
-                if isinstance(r_date, datetime):
-                    sick_dates.add(r_date.date())
-                elif isinstance(r_date, date):
-                    sick_dates.add(r_date)
-
-    if not sick_dates:
-        return {}
-
-    # מיון לפי תאריך
-    sorted_dates = sorted(sick_dates)
-
-    # בניית מילון עם מספר יום לכל תאריך
-    sick_day_numbers = {}
-    day_in_sequence = 1
-
-    for i, d in enumerate(sorted_dates):
-        if i == 0:
-            sick_day_numbers[d] = 1
-        else:
-            prev_date = sorted_dates[i - 1]
-            # אם ההפרש הוא יום אחד בדיוק - המשך רצף
-            if (d - prev_date).days == 1:
-                day_in_sequence += 1
-            else:
-                # הפסקה - התחלת רצף חדש
-                day_in_sequence = 1
-            sick_day_numbers[d] = day_in_sequence
-
-    return sick_day_numbers
-
-
-def get_sick_payment_rate(sick_day_number: int) -> float:
-    """
-    קביעת אחוז התשלום לפי מספר יום המחלה ברצף.
-
-    Args:
-        sick_day_number: מספר היום ברצף (1, 2, 3, 4...)
-
-    Returns:
-        אחוז התשלום (0.0, 0.5, או 1.0)
-    """
-    if sick_day_number == 1:
-        return 0.0  # יום ראשון - 0%
-    elif sick_day_number <= 3:
-        return 0.5  # ימים 2-3 - 50%
-    else:
-        return 1.0  # מיום 4 והלאה - 100%
 
 
 def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat_cache: Dict, minimum_wage: float):

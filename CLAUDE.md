@@ -17,7 +17,8 @@ diyur003/
 │   ├── database.py        # חיבורי PostgreSQL + pooling
 │   ├── logic.py           # API ראשי לחישוב חודשי (מעטפת ל-app_utils)
 │   ├── time_utils.py      # זמן, זיהוי שבת
-│   └── history.py         # נתונים היסטוריים
+│   ├── history.py         # נתונים היסטוריים
+│   └── sick_days.py       # לוגיקת ימי מחלה
 ├── routes/                # נתיבי API
 │   ├── home.py            # דף בית + רשימת מדריכים
 │   ├── guide.py           # תצוגה מפורטת למדריך
@@ -117,6 +118,11 @@ GET /export/excel              → ייצוא Excel
 - `aggregate_daily_segments_to_monthly()` - צבירה לסיכום חודשי
 - `calculate_wage_rate()` - קביעת אחוז שכר
 - `_calculate_chain_wages()` - חישוב רצף עבודה
+- `get_standby_rate()` - קבלת תעריף כוננות מה-DB
+
+### core/sick_days.py
+- `_identify_sick_day_sequences()` - זיהוי רצפי ימי מחלה
+- `get_sick_payment_rate()` - אחוז תשלום לפי יום מחלה
 
 ## ארכיטקטורת החישוב
 
@@ -125,6 +131,8 @@ GET /export/excel              → ייצוא Excel
 - `aggregate_daily_segments_to_monthly()` - צבירה לסיכום חודשי
 
 **`logic.py` = מעטפת בלבד** - קורא ל-`app_utils.py` ומחזיר תוצאות.
+
+**אין תלויות מעגליות** - `app_utils.py` לא מייבא מ-`logic.py`.
 
 ## ⚠️ אזהרות חשובות
 
