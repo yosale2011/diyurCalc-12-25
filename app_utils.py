@@ -7,11 +7,6 @@ from core.time_utils import (
     FRIDAY, SATURDAY,
     span_minutes, to_local_date, _get_shabbat_boundaries,
 )
-from core.constants import (
-    BREAK_THRESHOLD_MINUTES,
-    NIGHT_REGULAR_HOURS_LIMIT,
-    NIGHT_OVERTIME_125_LIMIT,
-)
 from core.logic import get_standby_rate
 from utils.utils import overlap_minutes, to_gematria, month_range_ts, merge_intervals, find_uncovered_intervals
 from convertdate import hebrew
@@ -40,27 +35,22 @@ from core.constants import (
     THERAPEUTIC_APT_TYPE,
     # Standby constants
     MAX_CANCELLED_STANDBY_DEDUCTION,
+    STANDBY_CANCEL_OVERLAP_THRESHOLD,
+    DEFAULT_STANDBY_RATE,
+    # Break/Chain constants
+    BREAK_THRESHOLD_MINUTES,
+    # Night shift overtime thresholds
+    NIGHT_REGULAR_HOURS_LIMIT,
+    NIGHT_OVERTIME_125_LIMIT,
     # Helper functions
     is_tagbur_shift,
     is_night_shift,
     is_shabbat_shift,
     is_implicit_tagbur,
-    # Night shift overtime detection
     qualifies_as_night_shift,
 )
 
 logger = logging.getLogger(__name__)
-
-# =============================================================================
-# Wage Calculation Constants (moved from core/wage_calculator.py)
-# =============================================================================
-
-# Standby cancellation threshold
-# If work overlaps with standby by more than this percentage, standby is cancelled
-STANDBY_CANCEL_OVERLAP_THRESHOLD = 0.70  # 70%
-
-# Default standby rate
-DEFAULT_STANDBY_RATE = 70.0
 
 
 # =============================================================================

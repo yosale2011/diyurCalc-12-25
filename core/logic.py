@@ -14,7 +14,7 @@ from typing import List, Tuple, Dict, Any
 
 from utils.cache_manager import cached
 from core.time_utils import get_shabbat_times_cache
-from app_utils import DEFAULT_STANDBY_RATE
+from core.constants import DEFAULT_STANDBY_RATE
 
 # =============================================================================
 # Configure logging
