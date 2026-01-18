@@ -25,13 +25,10 @@ from decimal import Decimal
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from core.wage_calculator import calculate_wage_rate, _calculate_chain_wages
+from app_utils import calculate_wage_rate, _calculate_chain_wages
 from core.time_utils import (
-    is_shabbat_time,
     REGULAR_HOURS_LIMIT,
     OVERTIME_125_LIMIT,
-    FRIDAY,
-    SATURDAY,
 )
 from core.constants import (
     NIGHT_REGULAR_HOURS_LIMIT,
@@ -121,30 +118,6 @@ class TestShabbatCalculation(unittest.TestCase):
         # 150% + שבת = 200%
         self.assertEqual(calculate_wage_rate(601, True), "200%")
         self.assertEqual(calculate_wage_rate(720, True), "200%")
-
-    def test_friday_evening_is_shabbat(self):
-        """יום שישי אחרי 16:00 = שבת"""
-        friday = date(2024, 12, 13)  # יום שישי
-        cache = {}
-
-        # לפני 16:00 = לא שבת
-        self.assertFalse(is_shabbat_time(FRIDAY, 900, 1, friday, cache))  # 15:00
-
-        # אחרי 16:00 = שבת
-        self.assertTrue(is_shabbat_time(FRIDAY, 960, 1, friday, cache))   # 16:00
-        self.assertTrue(is_shabbat_time(FRIDAY, 1200, 1, friday, cache))  # 20:00
-
-    def test_saturday_before_exit_is_shabbat(self):
-        """שבת לפני יציאת שבת = שבת"""
-        saturday = date(2024, 12, 14)  # יום שבת
-        cache = {}
-
-        # כל היום עד 22:00 = שבת
-        self.assertTrue(is_shabbat_time(SATURDAY, 480, 1, saturday, cache))   # 08:00
-        self.assertTrue(is_shabbat_time(SATURDAY, 1200, 1, saturday, cache))  # 20:00
-
-        # אחרי 22:00 = לא שבת
-        self.assertFalse(is_shabbat_time(SATURDAY, 1380, 1, saturday, cache)) # 23:00
 
 
 class TestCarryover(unittest.TestCase):

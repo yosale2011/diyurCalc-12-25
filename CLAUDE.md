@@ -10,13 +10,12 @@
 ```
 diyur003/
 ├── app.py                 # נקודת כניסה FastAPI
-├── app_utils.py           # נתוני סגמנטים יומיים למסך guide
+├── app_utils.py           # מקור האמת לחישוב שכר + סגמנטים יומיים
 ├── core/                  # לוגיקה עסקית
 │   ├── config.py          # הגדרות (VERSION, DB, timezone)
 │   ├── constants.py       # קבועים (shift IDs, זמנים)
 │   ├── database.py        # חיבורי PostgreSQL + pooling
-│   ├── logic.py           # API ראשי לחישוב חודשי
-│   ├── wage_calculator.py # מנוע חישוב שכר (בלוקים, רצפים)
+│   ├── logic.py           # API ראשי לחישוב חודשי (מעטפת ל-app_utils)
 │   ├── time_utils.py      # זמן, זיהוי שבת
 │   └── history.py         # נתונים היסטוריים
 ├── routes/                # נתיבי API
@@ -111,14 +110,13 @@ GET /export/excel              → ייצוא Excel
 ## פונקציות מרכזיות
 
 ### core/logic.py
-- `calculate_person_monthly_totals()` - חישוב סיכום חודשי
-
-### core/wage_calculator.py
-- `calculate_wage_rate()` - קביעת אחוז שכר
-- `_calculate_chain_wages()` - חישוב רצף עבודה
+- `calculate_person_monthly_totals()` - חישוב סיכום חודשי (מעטפת)
 
 ### app_utils.py
 - `get_daily_segments_data()` - נתוני סגמנטים לתצוגה
+- `aggregate_daily_segments_to_monthly()` - צבירה לסיכום חודשי
+- `calculate_wage_rate()` - קביעת אחוז שכר
+- `_calculate_chain_wages()` - חישוב רצף עבודה
 
 ## ארכיטקטורת החישוב
 

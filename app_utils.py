@@ -3,12 +3,14 @@ from typing import Dict, List, Tuple, Any, Optional
 from datetime import datetime, timedelta, date
 from core.time_utils import (
     MINUTES_PER_HOUR, MINUTES_PER_DAY, LOCAL_TZ,
-    span_minutes, to_local_date, is_shabbat_time,
+    REGULAR_HOURS_LIMIT, OVERTIME_125_LIMIT,
+    FRIDAY, SATURDAY,
+    span_minutes, to_local_date, _get_shabbat_boundaries,
 )
-from core.constants import BREAK_THRESHOLD_MINUTES
-from core.wage_calculator import (
-    STANDBY_CANCEL_OVERLAP_THRESHOLD, DEFAULT_STANDBY_RATE,
-    _calculate_chain_wages,
+from core.constants import (
+    BREAK_THRESHOLD_MINUTES,
+    NIGHT_REGULAR_HOURS_LIMIT,
+    NIGHT_OVERTIME_125_LIMIT,
 )
 from core.logic import get_standby_rate
 from utils.utils import overlap_minutes, to_gematria, month_range_ts, merge_intervals, find_uncovered_intervals
@@ -49,6 +51,340 @@ from core.constants import (
 
 logger = logging.getLogger(__name__)
 
+# =============================================================================
+# Wage Calculation Constants (moved from core/wage_calculator.py)
+# =============================================================================
+
+# Standby cancellation threshold
+# If work overlaps with standby by more than this percentage, standby is cancelled
+STANDBY_CANCEL_OVERLAP_THRESHOLD = 0.70  # 70%
+
+# Default standby rate
+DEFAULT_STANDBY_RATE = 70.0
+
+
+# =============================================================================
+# Wage Rate Calculation (moved from core/wage_calculator.py)
+# =============================================================================
+
+def calculate_wage_rate(
+    minutes_in_chain: int,
+    is_shabbat: bool,
+    is_night_shift: bool = False
+) -> str:
+    """
+    Determine the wage rate label based on hours worked in chain and Shabbat status.
+
+    Args:
+        minutes_in_chain: Total minutes worked so far in the current chain
+        is_shabbat: Whether this minute falls within Shabbat hours
+        is_night_shift: Whether this is a night shift (uses 7-hour day instead of 8)
+
+    Returns:
+        Rate label: "100%", "125%", "150%", "175%", or "200%"
+    """
+    # Use night shift thresholds if applicable (7 hours instead of 8)
+    regular_limit = NIGHT_REGULAR_HOURS_LIMIT if is_night_shift else REGULAR_HOURS_LIMIT
+    overtime_limit = NIGHT_OVERTIME_125_LIMIT if is_night_shift else OVERTIME_125_LIMIT
+
+    if minutes_in_chain <= regular_limit:
+        return "150%" if is_shabbat else "100%"
+    elif minutes_in_chain <= overtime_limit:
+        return "175%" if is_shabbat else "125%"
+    else:
+        return "200%" if is_shabbat else "150%"
+
+
+# =============================================================================
+# Chain Wage Calculation (moved from core/wage_calculator.py)
+# =============================================================================
+
+def _calculate_chain_wages(
+    chain_segments: List[Tuple[int, int, int]],
+    day_date: date,
+    shabbat_cache: Dict[str, Dict[str, str]],
+    minutes_offset: int = 0,
+    is_night_shift: bool = False
+) -> Dict[str, Any]:
+    """
+    חישוב שכר לרצף עבודה (chain) בשיטת בלוקים.
+
+    במקום לעבור דקה-דקה, מחשב בלוקים לפי גבולות:
+    - 480 דקות (מעבר 100% -> 125%) - או 420 למשמרת לילה
+    - 600 דקות (מעבר 125% -> 150%) - או 540 למשמרת לילה
+    - גבולות שבת (כניסה/יציאה)
+
+    Args:
+        chain_segments: List of (start_min, end_min, shift_id) tuples
+        day_date: The date for Shabbat calculation
+        shabbat_cache: Cache of Shabbat times
+        minutes_offset: Minutes already worked in this chain (from previous day's carryover)
+        is_night_shift: Whether this is a night shift (uses 7-hour day instead of 8)
+
+    Returns:
+        Dict with calc100, calc125, calc150, calc175, calc200,
+        calc150_shabbat, calc150_overtime, calc150_shabbat_100, calc150_shabbat_50,
+        and segments_detail - list of (start_min, end_min, label, is_shabbat) for display
+    """
+    result = {
+        "calc100": 0, "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0,
+        "calc150_shabbat": 0, "calc150_overtime": 0,
+        "calc150_shabbat_100": 0, "calc150_shabbat_50": 0,
+        "segments_detail": []  # For display: list of (start_min, end_min, label, is_shabbat)
+    }
+
+    if not chain_segments:
+        return result
+
+    weekday = day_date.weekday()
+    is_fri_or_sat = weekday in (FRIDAY, SATURDAY)
+
+    # Get Shabbat boundaries if relevant
+    shabbat_enter, shabbat_exit = (-1, -1)
+    if is_fri_or_sat:
+        shabbat_enter, shabbat_exit = _get_shabbat_boundaries(day_date, shabbat_cache)
+
+    # Flatten all segments into a list of (abs_start, abs_end) in continuous minutes
+    # and calculate total chain minutes
+    total_chain_minutes = 0
+    flat_segments = []
+
+    for seg_start, seg_end, seg_shift_id in chain_segments:
+        flat_segments.append((seg_start, seg_end))
+        total_chain_minutes += (seg_end - seg_start)
+
+    # Process in blocks based on overtime thresholds
+    # Use night shift thresholds if applicable (7 hours instead of 8)
+    regular_limit = NIGHT_REGULAR_HOURS_LIMIT if is_night_shift else REGULAR_HOURS_LIMIT
+    overtime_limit = NIGHT_OVERTIME_125_LIMIT if is_night_shift else OVERTIME_125_LIMIT
+    # Start from offset if this chain continues from previous day
+    minutes_processed = minutes_offset
+
+    for seg_start, seg_end in flat_segments:
+        seg_duration = seg_end - seg_start
+        seg_offset = 0
+
+        while seg_offset < seg_duration:
+            current_abs_minute = seg_start + seg_offset
+            current_chain_minute = minutes_processed + 1  # 1-based for wage calculation
+
+            # Determine which overtime tier we're in
+            if current_chain_minute <= regular_limit:
+                tier_end = regular_limit
+                base_rate = "100%"
+                shabbat_rate = "150%"
+            elif current_chain_minute <= overtime_limit:
+                tier_end = overtime_limit
+                base_rate = "125%"
+                shabbat_rate = "175%"
+            else:
+                tier_end = float('inf')
+                base_rate = "150%"
+                shabbat_rate = "200%"
+
+            # How many minutes until we hit the next tier?
+            minutes_until_tier_change = tier_end - minutes_processed
+
+            # How many minutes left in this segment?
+            minutes_left_in_seg = seg_duration - seg_offset
+
+            # Take the minimum
+            block_size = min(minutes_until_tier_change, minutes_left_in_seg)
+
+            # Now check Shabbat boundaries within this block
+            if is_fri_or_sat:
+                block_abs_start = current_abs_minute
+                block_abs_end = current_abs_minute + block_size
+
+                # נרמול זמנים - זמנים מעל 1440 הם בבוקר (אחרי חצות)
+                # לדוגמה: 1830 = 06:30 בבוקר של היום הבא
+                actual_block_start = block_abs_start % MINUTES_PER_DAY
+                actual_block_end = block_abs_end % MINUTES_PER_DAY
+                # אם הסגמנט חוצה חצות, end יהיה קטן מ-start
+                if actual_block_end <= actual_block_start and block_abs_end > block_abs_start:
+                    actual_block_end = block_abs_end % MINUTES_PER_DAY or MINUTES_PER_DAY
+
+                # Adjust for day offset (if segment crosses midnight)
+                # day_offset מייצג את המרחק מחצות יום שישי
+                # - יום שישי: offset = 0 (או 1440 אם חצה חצות = שבת בבוקר)
+                # - יום שבת: offset = 1440
+                # - יום ראשון בוקר (זמנים >= 1440 מנורמלים ליום שבת): offset = 2880
+                day_offset_start = 0
+                day_offset_end = 0
+                if weekday == FRIDAY:
+                    # אם הזמן מתחיל אחרי חצות ביום שישי, זה בעצם שבת בבוקר
+                    if block_abs_start >= MINUTES_PER_DAY:
+                        day_offset_start = MINUTES_PER_DAY
+                    # אם הזמן נגמר אחרי חצות (ומתחיל לפני), זה עובר לשבת בבוקר
+                    # שימוש ב-> ולא >= כי 1440 בדיוק (חצות) הוא עדיין סוף יום שישי
+                    if block_abs_end > MINUTES_PER_DAY:
+                        day_offset_end = MINUTES_PER_DAY
+                elif weekday == SATURDAY:
+                    day_offset_start = MINUTES_PER_DAY
+                    day_offset_end = MINUTES_PER_DAY
+                    # אם הזמן המקורי חצה חצות (>=1440), זה בעצם יום ראשון בבוקר
+                    if block_abs_start >= MINUTES_PER_DAY:
+                        day_offset_start = 2 * MINUTES_PER_DAY
+                    if block_abs_end >= MINUTES_PER_DAY:
+                        day_offset_end = 2 * MINUTES_PER_DAY
+
+                abs_start_from_fri = actual_block_start + day_offset_start
+                abs_end_from_fri = actual_block_end + day_offset_end
+
+                # Helper to add segment detail
+                def add_segment_detail(start_min, end_min, rate_label, is_shabbat):
+                    result["segments_detail"].append((start_min, end_min, rate_label, is_shabbat))
+
+                # Split block at Shabbat boundaries
+                # Case 1: Entirely before Shabbat
+                if abs_end_from_fri <= shabbat_enter:
+                    if base_rate == "100%":
+                        result["calc100"] += block_size
+                        add_segment_detail(block_abs_start, block_abs_end, "100%", False)
+                    elif base_rate == "125%":
+                        result["calc125"] += block_size
+                        add_segment_detail(block_abs_start, block_abs_end, "125%", False)
+                    else:
+                        result["calc150"] += block_size
+                        result["calc150_overtime"] += block_size
+                        add_segment_detail(block_abs_start, block_abs_end, "150%", False)
+
+                # Case 2: Entirely during Shabbat
+                elif abs_start_from_fri >= shabbat_enter and abs_end_from_fri <= shabbat_exit:
+                    if shabbat_rate == "150%":
+                        result["calc150"] += block_size
+                        result["calc150_shabbat"] += block_size
+                        result["calc150_shabbat_100"] += block_size
+                        result["calc150_shabbat_50"] += block_size
+                        add_segment_detail(block_abs_start, block_abs_end, "150% שבת", True)
+                    elif shabbat_rate == "175%":
+                        result["calc175"] += block_size
+                        add_segment_detail(block_abs_start, block_abs_end, "175% שבת", True)
+                    else:
+                        result["calc200"] += block_size
+                        add_segment_detail(block_abs_start, block_abs_end, "200% שבת", True)
+
+                # Case 3: Entirely after Shabbat
+                elif abs_start_from_fri >= shabbat_exit:
+                    if base_rate == "100%":
+                        result["calc100"] += block_size
+                        add_segment_detail(block_abs_start, block_abs_end, "100%", False)
+                    elif base_rate == "125%":
+                        result["calc125"] += block_size
+                        add_segment_detail(block_abs_start, block_abs_end, "125%", False)
+                    else:
+                        result["calc150"] += block_size
+                        result["calc150_overtime"] += block_size
+                        add_segment_detail(block_abs_start, block_abs_end, "150%", False)
+
+                # Case 4: Block crosses Shabbat start
+                elif abs_start_from_fri < shabbat_enter < abs_end_from_fri:
+                    before_shabbat = shabbat_enter - abs_start_from_fri
+                    during_shabbat = abs_end_from_fri - shabbat_enter
+
+                    # Before Shabbat part
+                    if base_rate == "100%":
+                        result["calc100"] += before_shabbat
+                        add_segment_detail(block_abs_start, block_abs_start + before_shabbat, "100%", False)
+                    elif base_rate == "125%":
+                        result["calc125"] += before_shabbat
+                        add_segment_detail(block_abs_start, block_abs_start + before_shabbat, "125%", False)
+                    else:
+                        result["calc150"] += before_shabbat
+                        result["calc150_overtime"] += before_shabbat
+                        add_segment_detail(block_abs_start, block_abs_start + before_shabbat, "150%", False)
+
+                    # During Shabbat part
+                    shabbat_start_abs = block_abs_start + before_shabbat
+                    if shabbat_rate == "150%":
+                        result["calc150"] += during_shabbat
+                        result["calc150_shabbat"] += during_shabbat
+                        result["calc150_shabbat_100"] += during_shabbat
+                        result["calc150_shabbat_50"] += during_shabbat
+                        add_segment_detail(shabbat_start_abs, block_abs_end, "150% שבת", True)
+                    elif shabbat_rate == "175%":
+                        result["calc175"] += during_shabbat
+                        add_segment_detail(shabbat_start_abs, block_abs_end, "175% שבת", True)
+                    else:
+                        result["calc200"] += during_shabbat
+                        add_segment_detail(shabbat_start_abs, block_abs_end, "200% שבת", True)
+
+                # Case 5: Block crosses Shabbat end
+                elif abs_start_from_fri < shabbat_exit < abs_end_from_fri:
+                    during_shabbat = shabbat_exit - abs_start_from_fri
+                    after_shabbat = abs_end_from_fri - shabbat_exit
+
+                    # During Shabbat part
+                    if shabbat_rate == "150%":
+                        result["calc150"] += during_shabbat
+                        result["calc150_shabbat"] += during_shabbat
+                        result["calc150_shabbat_100"] += during_shabbat
+                        result["calc150_shabbat_50"] += during_shabbat
+                        add_segment_detail(block_abs_start, block_abs_start + during_shabbat, "150% שבת", True)
+                    elif shabbat_rate == "175%":
+                        result["calc175"] += during_shabbat
+                        add_segment_detail(block_abs_start, block_abs_start + during_shabbat, "175% שבת", True)
+                    else:
+                        result["calc200"] += during_shabbat
+                        add_segment_detail(block_abs_start, block_abs_start + during_shabbat, "200% שבת", True)
+
+                    # After Shabbat part
+                    after_start_abs = block_abs_start + during_shabbat
+                    if base_rate == "100%":
+                        result["calc100"] += after_shabbat
+                        add_segment_detail(after_start_abs, block_abs_end, "100%", False)
+                    elif base_rate == "125%":
+                        result["calc125"] += after_shabbat
+                        add_segment_detail(after_start_abs, block_abs_end, "125%", False)
+                    else:
+                        result["calc150"] += after_shabbat
+                        result["calc150_overtime"] += after_shabbat
+                        add_segment_detail(after_start_abs, block_abs_end, "150%", False)
+
+                else:
+                    # Fallback - shouldn't happen but just in case
+                    if base_rate == "100%":
+                        result["calc100"] += block_size
+                        add_segment_detail(block_abs_start, block_abs_end, "100%", False)
+                    elif base_rate == "125%":
+                        result["calc125"] += block_size
+                        add_segment_detail(block_abs_start, block_abs_end, "125%", False)
+                    else:
+                        result["calc150"] += block_size
+                        result["calc150_overtime"] += block_size
+                        add_segment_detail(block_abs_start, block_abs_end, "150%", False)
+            else:
+                # Not Friday or Saturday - simple calculation
+                if base_rate == "100%":
+                    result["calc100"] += block_size
+                    result["segments_detail"].append((current_abs_minute, current_abs_minute + block_size, "100%", False))
+                elif base_rate == "125%":
+                    result["calc125"] += block_size
+                    result["segments_detail"].append((current_abs_minute, current_abs_minute + block_size, "125%", False))
+                else:
+                    result["calc150"] += block_size
+                    result["calc150_overtime"] += block_size
+                    result["segments_detail"].append((current_abs_minute, current_abs_minute + block_size, "150%", False))
+
+            seg_offset += block_size
+            minutes_processed += block_size
+
+    # Merge adjacent segments with the same label for cleaner display
+    merged_segments = []
+    for seg in result["segments_detail"]:
+        if merged_segments and merged_segments[-1][2] == seg[2] and merged_segments[-1][1] == seg[0]:
+            # Merge with previous segment
+            merged_segments[-1] = (merged_segments[-1][0], seg[1], seg[2], seg[3])
+        else:
+            merged_segments.append(seg)
+    result["segments_detail"] = merged_segments
+
+    return result
+
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
 
 def get_effective_hourly_rate(report, minimum_wage: float) -> float:
     """

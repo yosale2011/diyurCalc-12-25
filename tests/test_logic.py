@@ -3,7 +3,7 @@ Unit tests for logic module - testing critical calculation functions.
 """
 
 import unittest
-from datetime import datetime, date, timedelta
+from datetime import datetime
 from unittest.mock import Mock, patch, MagicMock
 import sys
 import os
@@ -11,14 +11,13 @@ import os
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from core.wage_calculator import calculate_wage_rate
+from app_utils import calculate_wage_rate
 from core.time_utils import (
     minutes_to_time_str,
     span_minutes,
-    is_shabbat_time,
     REGULAR_HOURS_LIMIT,
     OVERTIME_125_LIMIT,
-    parse_hhmm, FRIDAY, SATURDAY,
+    parse_hhmm,
 )
 from utils.utils import calculate_annual_vacation_quota, overlap_minutes
 
@@ -202,58 +201,6 @@ class TestOverlapCalculations(unittest.TestCase):
     #
     #     # Invalid ranges
     #     self.assertAlmostEqual(calculate_overlap_percentage(600, 480, 540, 660), 0.0)
-
-
-class TestShabbatDetection(unittest.TestCase):
-    """Test Shabbat time detection."""
-
-    def test_is_shabbat_time_defaults(self):
-        """Test Shabbat detection with default times."""
-        friday_date = date(2024, 12, 13)  # A Friday
-        saturday_date = date(2024, 12, 14)  # A Saturday
-
-        # Empty cache (uses defaults)
-        cache = {}
-
-        # Friday evening (after 16:00)
-        self.assertTrue(is_shabbat_time(FRIDAY, 960, 1, friday_date, cache))  # 16:00
-        self.assertTrue(is_shabbat_time(FRIDAY, 1200, 1, friday_date, cache))  # 20:00
-
-        # Friday morning (before 16:00)
-        self.assertFalse(is_shabbat_time(FRIDAY, 480, 1, friday_date, cache))  # 08:00
-        self.assertFalse(is_shabbat_time(FRIDAY, 900, 1, friday_date, cache))  # 15:00
-
-        # Saturday (before 22:00)
-        self.assertTrue(is_shabbat_time(SATURDAY, 480, 1, saturday_date, cache))  # 08:00
-        self.assertTrue(is_shabbat_time(SATURDAY, 1200, 1, saturday_date, cache))  # 20:00
-
-        # Saturday night (after 22:00)
-        self.assertFalse(is_shabbat_time(SATURDAY, 1380, 1, saturday_date, cache))  # 23:00
-
-    def test_is_shabbat_time_from_cache(self):
-        """Test Shabbat detection with times from cache."""
-        friday_date = date(2024, 12, 13)
-        saturday_date = date(2024, 12, 14)
-
-        # Cache with custom times
-        cache = {
-            "2024-12-14": {  # Saturday is the key
-                "enter": "17:30",  # Friday candle lighting
-                "exit": "18:45"     # Saturday havdalah
-            }
-        }
-
-        # Friday after candle lighting
-        self.assertTrue(is_shabbat_time(FRIDAY, 1080, 1, friday_date, cache))  # 18:00
-
-        # Friday before candle lighting
-        self.assertFalse(is_shabbat_time(FRIDAY, 1020, 1, friday_date, cache))  # 17:00
-
-        # Saturday before havdalah
-        self.assertTrue(is_shabbat_time(SATURDAY, 1080, 1, saturday_date, cache))  # 18:00
-
-        # Saturday after havdalah
-        self.assertFalse(is_shabbat_time(SATURDAY, 1200, 1, saturday_date, cache))  # 20:00
 
 
 # class TestValidation(unittest.TestCase):

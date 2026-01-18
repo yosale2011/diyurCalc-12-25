@@ -4,7 +4,7 @@ Contains public API functions for calculating monthly totals and summaries.
 
 Import directly from submodules for specific functionality:
 - core.time_utils: Time conversion and Shabbat detection
-- core.wage_calculator: Wage calculation and daily processing
+- app_utils: Wage calculation (single source of truth)
 - core.constants: Shift IDs and constants
 """
 import logging
@@ -12,9 +12,9 @@ import psycopg2
 import psycopg2.extras
 from typing import List, Tuple, Dict, Any
 
-from utils.cache_manager import cached, cache
+from utils.cache_manager import cached
 from core.time_utils import get_shabbat_times_cache
-from core.wage_calculator import DEFAULT_STANDBY_RATE
+from app_utils import DEFAULT_STANDBY_RATE
 
 # =============================================================================
 # Configure logging
@@ -25,40 +25,6 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 # Data Access Functions (with caching)
 # =============================================================================
-
-MINIMUM_WAGE_CACHE_KEY = "minimum_wage_cache"
-MINIMUM_WAGE_CACHE_TTL = 86400  # 24 hours
-
-
-def get_minimum_wage(conn) -> float:
-    """
-    Get current minimum wage rate from DB with 24-hour caching.
-    Returns hourly rate in shekels.
-
-    Raises:
-        ValueError: if no valid minimum wage found in DB
-    """
-    cached_result = cache.get(MINIMUM_WAGE_CACHE_KEY)
-    if cached_result is not None:
-        return cached_result
-
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cursor.execute("SELECT hourly_rate FROM minimum_wage_rates ORDER BY effective_from DESC LIMIT 1")
-    row = cursor.fetchone()
-    cursor.close()
-
-    if row and row["hourly_rate"]:
-        result = float(row["hourly_rate"]) / 100  # Convert from agorot to shekels
-        if result <= 0:
-            raise ValueError("Invalid minimum wage rate in DB (must be positive)")
-    else:
-        raise ValueError(
-            "No minimum wage found in DB. "
-            "Please add a rate to minimum_wage_rates table."
-        )
-
-    cache.set(MINIMUM_WAGE_CACHE_KEY, result, MINIMUM_WAGE_CACHE_TTL)
-    return result
 
 
 def get_standby_rate(conn, segment_id: int, apartment_type_id: int | None, is_married: bool, year: int = None, month: int = None) -> float:
