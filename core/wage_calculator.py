@@ -14,8 +14,8 @@ from core.time_utils import (
     FRIDAY, SATURDAY,
     _get_shabbat_boundaries
 )
-from core.segments import BREAK_THRESHOLD_MINUTES
 from core.constants import (
+    BREAK_THRESHOLD_MINUTES,
     NIGHT_REGULAR_HOURS_LIMIT,
     NIGHT_OVERTIME_125_LIMIT,
     qualifies_as_night_shift,

@@ -17,7 +17,6 @@ diyur003/
 │   ├── database.py        # חיבורי PostgreSQL + pooling
 │   ├── logic.py           # API ראשי לחישוב חודשי
 │   ├── wage_calculator.py # מנוע חישוב שכר (בלוקים, רצפים)
-│   ├── segments.py        # עיבוד סגמנטי משמרות
 │   ├── time_utils.py      # זמן, זיהוי שבת
 │   └── history.py         # נתונים היסטוריים
 ├── routes/                # נתיבי API

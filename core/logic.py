@@ -4,7 +4,6 @@ Contains public API functions for calculating monthly totals and summaries.
 
 Import directly from submodules for specific functionality:
 - core.time_utils: Time conversion and Shabbat detection
-- core.segments: Shift segment processing
 - core.wage_calculator: Wage calculation and daily processing
 - core.constants: Shift IDs and constants
 """
