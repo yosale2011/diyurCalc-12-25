@@ -11,16 +11,9 @@ New code should import directly from the submodules:
 import logging
 import psycopg2
 import psycopg2.extras
-from datetime import datetime, timedelta, date
 from typing import List, Tuple, Dict, Any
-from zoneinfo import ZoneInfo
 
-from convertdate import hebrew
-
-# Import utilities and config
-from core.config import config
 from utils.cache_manager import cached, cache
-from utils.utils import overlap_minutes
 
 # =============================================================================
 # Re-exports from submodules for backwards compatibility
@@ -35,18 +28,12 @@ from core.time_utils import (
     WORK_DAY_START_MINUTES,
     SHABBAT_ENTER_DEFAULT,
     SHABBAT_EXIT_DEFAULT,
-    FRIDAY,
-    SATURDAY,
     LOCAL_TZ,
     to_local_date,
-    parse_hhmm,
     span_minutes,
     minutes_to_time_str,
     is_shabbat_time,
     get_shabbat_times_cache,
-    _get_shabbat_boundaries,
-    SHABBAT_CACHE_KEY,
-    SHABBAT_CACHE_TTL,
 )
 
 # Segment processing
@@ -57,11 +44,6 @@ from core.segments import (
     NIGHT_SHIFT_MORNING_END,
     NOON_MINUTES,
     MEDICAL_ESCORT_SHIFT_ID,
-    _create_segment_dict,
-    _build_night_shift_segments,
-    _process_tagbur_shift,
-    _process_fixed_vacation_shift,
-    _build_daily_map,
 )
 
 # Wage calculation
@@ -70,7 +52,6 @@ from core.wage_calculator import (
     DEFAULT_STANDBY_RATE,
     calculate_wage_rate,
     _calculate_chain_wages,
-    _process_daily_map,
 )
 
 # Month availability functions - now in utils
@@ -81,22 +62,6 @@ from utils.utils import available_months, available_months_from_db
 # =============================================================================
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# =============================================================================
-# Database utilities
-# =============================================================================
-
-def dict_cursor(conn):
-    """Create a cursor that returns rows as dicts."""
-    return conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-
-
-# =============================================================================
-# Local Constants (referenced from config)
-# =============================================================================
-STANDARD_WORK_DAYS_PER_MONTH = config.STANDARD_WORK_DAYS_PER_MONTH
-MAX_SICK_DAYS_PER_MONTH = config.MAX_SICK_DAYS_PER_MONTH
-
 
 # =============================================================================
 # Data Access Functions (with caching)
@@ -152,7 +117,6 @@ def get_standby_rate(conn, segment_id: int, apartment_type_id: int | None, is_ma
             conn, segment_id, apartment_type_id, marital_status, year, month
         )
         if historical_amount is not None:
-            logger.debug(f"Using historical standby rate for seg={segment_id}, type={apartment_type_id}: {historical_amount/100}")
             return float(historical_amount) / 100
 
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
@@ -275,161 +239,6 @@ def ensure_sick_payment_code(conn):
 # =============================================================================
 # Main Calculation Functions
 # =============================================================================
-
-def _create_empty_monthly_totals() -> Dict:
-    """
-    יצירת מילון סיכומים חודשיים ריק עם כל השדות הנדרשים.
-
-    מחזיר:
-        מילון עם כל שדות הסיכום מאותחלים לאפס
-    """
-    return {
-        "total_hours": 0,
-        "payment": 0,
-        "standby": 0,
-        "standby_payment": 0,
-        "actual_work_days": 0,
-        "vacation_days_taken": 0,
-        "calc100": 0,
-        "calc125": 0,
-        "calc150": 0,
-        "calc150_shabbat": 0,
-        "calc150_shabbat_100": 0,
-        "calc150_shabbat_50": 0,
-        "calc150_overtime": 0,
-        "calc175": 0,
-        "calc200": 0,
-        "calc_variable": 0,
-        "vacation_minutes": 0,
-        "vacation_payment": 0,
-        "travel": 0,
-        "extras": 0,
-        "sick_days_accrued": 0,
-        "vacation_days_accrued": 0
-    }
-
-
-def _build_variable_rate_map(reports: List[Dict]) -> Dict[int, float]:
-    """
-    בניית מפת תעריפים משתנים לפי סוג משמרת.
-
-    פרמטרים:
-        reports: רשימת דיווחים
-
-    מחזיר:
-        מילון {shift_type_id: rate} עם תעריפים מותאמים
-    """
-    variable_rate_by_shift = {}
-    for r in reports:
-        shift_rate = r.get("shift_rate")
-        shift_type_id = r.get("shift_type_id")
-        if shift_rate:
-            variable_rate_by_shift[shift_type_id] = float(shift_rate) / 100
-    return variable_rate_by_shift
-
-
-def _calculate_variable_rate_payment(
-    daily_map: Dict,
-    variable_rate_by_shift: Dict[int, float],
-    minimum_wage: float
-) -> Tuple[int, float]:
-    """
-    חישוב דקות ותשלום נוסף עבור תעריפים משתנים.
-
-    פרמטרים:
-        daily_map: מפת הימים עם הסגמנטים
-        variable_rate_by_shift: מפת תעריפים לפי משמרת
-        minimum_wage: שכר מינימום
-
-    מחזיר:
-        tuple של (דקות בתעריף משתנה, תשלום נוסף)
-    """
-    variable_rate_minutes = 0
-    variable_rate_extra_payment = 0.0
-
-    for day_key, entry in daily_map.items():
-        for seg in entry.get("segments", []):
-            s_start, s_end, s_type, shift_id, seg_id, apt_type, is_married = seg
-            duration = s_end - s_start
-            if s_type == "work":
-                if shift_id in variable_rate_by_shift:
-                    variable_rate_minutes += duration
-                    actual_rate = variable_rate_by_shift[shift_id]
-                    rate_diff = actual_rate - minimum_wage
-                    if rate_diff > 0:
-                        variable_rate_extra_payment += (duration / 60) * rate_diff
-
-    return variable_rate_minutes, variable_rate_extra_payment
-
-
-def _process_payment_components(payment_comps: List[Dict], monthly_totals: Dict) -> None:
-    """
-    עיבוד רכיבי תשלום נוספים (נסיעות ותוספות).
-
-    פרמטרים:
-        payment_comps: רשימת רכיבי תשלום
-        monthly_totals: מילון הסיכומים לעדכון
-    """
-    for pc in payment_comps:
-        amount = (pc["total_amount"] or 0) / 100
-        if pc["component_type_id"] == 2 or pc["component_type_id"] == 7:
-            monthly_totals["travel"] += amount
-        else:
-            monthly_totals["extras"] += amount
-
-
-def _get_default_vacation_details() -> Dict:
-    """
-    קבלת ערכי ברירת מחדל לפרטי חופשה.
-
-    מחזיר:
-        מילון עם ערכי ברירת מחדל
-    """
-    return {
-        "seniority": 1,
-        "annual_quota": 12,
-        "job_scope_pct": 100
-    }
-
-
-def _calculate_final_payment(monthly_totals: Dict, minimum_wage: float) -> None:
-    """
-    חישוב התשלום הסופי על בסיס כל הרכיבים.
-
-    פרמטרים:
-        monthly_totals: מילון הסיכומים
-        minimum_wage: שכר מינימום
-    """
-    pay = 0
-    pay += (monthly_totals["calc100"] / 60) * minimum_wage * 1.0
-    pay += (monthly_totals["calc125"] / 60) * minimum_wage * 1.25
-    pay += (monthly_totals["calc150"] / 60) * minimum_wage * 1.5
-    pay += (monthly_totals["calc175"] / 60) * minimum_wage * 1.75
-    pay += (monthly_totals["calc200"] / 60) * minimum_wage * 2.0
-    pay += monthly_totals.get("variable_rate_extra_payment", 0)
-    pay += monthly_totals["standby_payment"]
-    pay += monthly_totals["vacation_payment"]
-    monthly_totals["payment"] = pay
-    monthly_totals["total_payment"] = pay + monthly_totals["travel"] + monthly_totals["extras"]
-
-
-def _count_standby_dates(reports: List[Dict], shift_has_standby: Dict[int, bool]) -> int:
-    """
-    ספירת ימים עם כוננות.
-
-    פרמטרים:
-        reports: רשימת דיווחים
-        shift_has_standby: מילון המציין אילו משמרות כוללות כוננות
-
-    מחזיר:
-        מספר הימים עם כוננות
-    """
-    dates_with_standby = set()
-    for r in reports:
-        if r["shift_type_id"] and shift_has_standby.get(r["shift_type_id"], False):
-            dates_with_standby.add(r["date"])
-    return len(dates_with_standby)
-
 
 def calculate_person_monthly_totals(
     conn,

@@ -136,12 +136,6 @@ def overlap_minutes(a_start: int, a_end: int, b_start: int, b_end: int) -> int:
     return max(0, min(a_end, b_end) - max(a_start, b_start))
 
 
-def minutes_to_hours_str(minutes: int) -> str:
-    """Convert minutes to hours string with 2 decimal places."""
-    hours = minutes / 60
-    return f"{hours:.2f}".rstrip("0").rstrip(".")
-
-
 def to_gematria(num: int) -> str:
     """Simple gematria converter for numbers 1-31 and years."""
     if num <= 0:

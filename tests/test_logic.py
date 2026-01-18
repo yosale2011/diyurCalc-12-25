@@ -14,14 +14,12 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from core.logic import (
     calculate_wage_rate,
     minutes_to_time_str,
-    parse_hhmm,
     span_minutes,
     is_shabbat_time,
     REGULAR_HOURS_LIMIT,
     OVERTIME_125_LIMIT,
-    FRIDAY,
-    SATURDAY
 )
+from core.time_utils import parse_hhmm, FRIDAY, SATURDAY
 from utils.utils import calculate_annual_vacation_quota, overlap_minutes
 
 # from logic_enhanced import (

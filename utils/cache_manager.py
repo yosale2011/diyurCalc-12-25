@@ -10,7 +10,6 @@ import json
 import logging
 from functools import wraps
 from typing import Any, Optional, Callable, Dict, Tuple
-from datetime import datetime, timedelta
 import threading
 
 logger = logging.getLogger(__name__)
@@ -215,65 +214,6 @@ def cached(ttl: int = 300, key_prefix: Optional[str] = None):
 
         return wrapper
     return decorator
-
-
-def cache_key_builder(prefix: str, **params) -> str:
-    """
-    Build a cache key from parameters.
-
-    Args:
-        prefix: Key prefix
-        **params: Parameters to include in key
-
-    Returns:
-        Cache key string
-    """
-    return cache._make_key(prefix, **params)
-
-
-# Specific cache decorators for common use cases
-
-def cache_employee_data(ttl: int = 600):
-    """Cache employee data for 10 minutes by default."""
-    return cached(ttl=ttl, key_prefix="employee")
-
-
-def cache_report_data(ttl: int = 300):
-    """Cache report data for 5 minutes by default."""
-    return cached(ttl=ttl, key_prefix="report")
-
-
-def cache_shabbat_times(ttl: int = 86400):
-    """Cache Shabbat times for 24 hours by default."""
-    return cached(ttl=ttl, key_prefix="shabbat")
-
-
-def cache_calculation_result(ttl: int = 1800):
-    """Cache calculation results for 30 minutes by default."""
-    return cached(ttl=ttl, key_prefix="calculation")
-
-
-# Background cleanup task
-def start_cache_cleanup_task(interval: int = 300):
-    """
-    Start a background thread to clean up expired cache entries.
-
-    Args:
-        interval: Cleanup interval in seconds (default: 5 minutes)
-    """
-    def cleanup_loop():
-        while True:
-            time.sleep(interval)
-            try:
-                cache.cleanup_expired()
-                stats = cache.get_stats()
-                logger.info(f"Cache cleanup completed. Stats: {stats}")
-            except Exception as e:
-                logger.error(f"Cache cleanup failed: {e}")
-
-    cleanup_thread = threading.Thread(target=cleanup_loop, daemon=True)
-    cleanup_thread.start()
-    logger.info(f"Cache cleanup task started (interval: {interval}s)")
 
 
 # Request-scoped cache for web applications

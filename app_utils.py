@@ -7,7 +7,7 @@ from core.logic import (
     span_minutes, to_local_date, is_shabbat_time, calculate_wage_rate,
     get_standby_rate, _calculate_chain_wages
 )
-from utils.utils import overlap_minutes, minutes_to_hours_str, to_gematria, month_range_ts
+from utils.utils import overlap_minutes, to_gematria, month_range_ts
 from convertdate import hebrew
 import logging
 
@@ -44,16 +44,6 @@ from core.constants import (
 )
 
 logger = logging.getLogger(__name__)
-
-# =============================================================================
-# Backward compatibility aliases (with underscore prefix)
-# These are kept for backward compatibility with routes/guide.py
-# TODO: Update routes/guide.py to import directly from core.constants
-# =============================================================================
-_is_tagbur_shift = is_tagbur_shift
-_is_night_shift = is_night_shift
-_is_shabbat_shift = is_shabbat_shift
-_is_implicit_tagbur = is_implicit_tagbur
 
 
 def get_effective_hourly_rate(report, minimum_wage: float) -> float:
@@ -351,12 +341,12 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         # משמרות עם סגמנטים קבועים - משתמשים בסגמנטים המוגדרים ישירות (לא לפי שעות דיווח)
         # כולל: משמרות תגבור, יום חופשה, יום מחלה
         shift_type_id = r.get("shift_type_id")
-        is_fixed_segments_shift = _is_tagbur_shift(shift_type_id) or is_vacation_report or is_sick_report
+        is_fixed_segments_shift = is_tagbur_shift(shift_type_id) or is_vacation_report or is_sick_report
 
         # משמרת לילה - סגמנטים דינמיים לפי זמן הכניסה בפועל
         # החוק: 2 שעות ראשונות עבודה, עד 06:30 כוננות, 06:30-08:00 עבודה
-        is_night_shift = _is_night_shift(shift_type_id)
-        if is_night_shift:
+        is_night = is_night_shift(shift_type_id)
+        if is_night:
             # יצירת סגמנטים דינמיים לפי זמן הכניסה בפועל
             entry_time = rep_start_orig  # זמן הכניסה בדקות
             exit_time = rep_end_orig if rep_end_orig > entry_time else rep_end_orig + MINUTES_PER_DAY
@@ -852,7 +842,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
 
         # Check if this day qualifies as night shift (2+ hours in 22:00-06:00)
         # Night shifts use 7-hour workday instead of 8-hour for overtime calculation
-        day_is_night_shift = qualifies_as_night_shift([(w[0], w[1]) for w in work_segments])
+        dayis_night_shift = qualifies_as_night_shift([(w[0], w[1]) for w in work_segments])
 
         # Dedup standby - now includes shift_type_id (7 elements)
         deduped_sb = []
@@ -973,14 +963,14 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
 
                 # Determine shift type label (לפי ID, לא לפי שם)
                 shift_type_label = ""
-                if _is_tagbur_shift(sid):
+                if is_tagbur_shift(sid):
                     shift_type_label = "תגבור"
-                elif _is_implicit_tagbur(sid, actual_apt_type, apt_type):
+                elif is_implicit_tagbur(sid, actual_apt_type, apt_type):
                     # משמרת שישי/שבת בדירה טיפולית עם תעריף דירה רגילה = תגבור
                     shift_type_label = "תגבור"
-                elif _is_night_shift(sid):
+                elif is_night_shift(sid):
                     shift_type_label = "לילה"
-                elif _is_shabbat_shift(sid):
+                elif is_shabbat_shift(sid):
                     shift_type_label = "שבת"
                 else:
                     shift_type_label = "חול"
@@ -1217,7 +1207,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
 
             # Use optimized block calculation with carryover offset
             # Pass night shift flag for 7-hour workday threshold
-            result = _calculate_chain_wages(chain_segs, calc_date, shabbat_cache, minutes_offset, day_is_night_shift)
+            result = _calculate_chain_wages(chain_segs, calc_date, shabbat_cache, minutes_offset, dayis_night_shift)
 
             c_100 = result["calc100"]
             c_125 = result["calc125"]
@@ -1275,10 +1265,94 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             chain_shift_id = list(chain_shift_ids)[0] if chain_shift_ids else None
             shift_name_str = ", ".join(sorted(chain_shift_names)) if chain_shift_names else ""
 
-            # Create a separate chain row for each rate segment (like the old code)
-            for i, (seg_start, seg_end, seg_label, is_shabbat) in enumerate(seg_detail):
+            # Helper function: Split a rate segment by apartment boundaries
+            def split_segment_by_apartments(seg_start, seg_end, seg_label, is_shabbat, segs):
+                """
+                פיצול סגמנט לפי גבולות דירות.
+                אם יש כמה דירות באותו טווח זמן, מחזיר רשימת תת-סגמנטים.
+                """
+                result_segments = []
+                current_start = seg_start
+
+                # מיון הסגמנטים המקוריים לפי זמן התחלה
+                sorted_segs = sorted(segs, key=lambda x: x[0])
+
+                for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type in sorted_segs:
+                    # בדיקה אם יש חפיפה עם הטווח הנוכחי
+                    if s < seg_end and e > current_start:
+                        # זמן התחלה של החפיפה
+                        overlap_start = max(current_start, s)
+                        # זמן סיום של החפיפה
+                        overlap_end = min(seg_end, e)
+
+                        if overlap_end > overlap_start:
+                            result_segments.append({
+                                "start": overlap_start,
+                                "end": overlap_end,
+                                "label": seg_label,
+                                "is_shabbat": is_shabbat,
+                                "apt_name": apt,
+                                "apt_type": apt_type,
+                                "actual_apt_type": actual_apt_type,
+                                "rate_apt_type": rate_apt_type,
+                                "shift_id": sid
+                            })
+                            current_start = overlap_end
+
+                    if current_start >= seg_end:
+                        break
+
+                # אם לא נמצאו חפיפות, החזר סגמנט בודד עם ברירת מחדל
+                if not result_segments:
+                    if segs:
+                        s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type = segs[0]
+                        result_segments.append({
+                            "start": seg_start,
+                            "end": seg_end,
+                            "label": seg_label,
+                            "is_shabbat": is_shabbat,
+                            "apt_name": apt,
+                            "apt_type": apt_type,
+                            "actual_apt_type": actual_apt_type,
+                            "rate_apt_type": rate_apt_type,
+                            "shift_id": sid
+                        })
+                    else:
+                        result_segments.append({
+                            "start": seg_start,
+                            "end": seg_end,
+                            "label": seg_label,
+                            "is_shabbat": is_shabbat,
+                            "apt_name": "",
+                            "apt_type": None,
+                            "actual_apt_type": None,
+                            "rate_apt_type": None,
+                            "shift_id": None
+                        })
+
+                return result_segments
+
+            # Create a separate chain row for each rate segment, split by apartment
+            # First, expand all segments by apartment boundaries
+            expanded_segments = []
+            for seg_start, seg_end, seg_label, is_shabbat in seg_detail:
+                sub_segments = split_segment_by_apartments(seg_start, seg_end, seg_label, is_shabbat, segments)
+                expanded_segments.extend(sub_segments)
+
+            # Now create chain rows from expanded segments
+            for i, sub_seg in enumerate(expanded_segments):
                 is_first = (i == 0)
-                is_last = (i == len(seg_detail) - 1)
+                is_last = (i == len(expanded_segments) - 1)
+
+                seg_start = sub_seg["start"]
+                seg_end = sub_seg["end"]
+                seg_label = sub_seg["label"]
+                is_shabbat = sub_seg["is_shabbat"]
+                seg_apt_name = sub_seg["apt_name"]
+                seg_apt_type = sub_seg["apt_type"]
+                seg_actual_apt = sub_seg["actual_apt_type"]
+                seg_rate_apt = sub_seg["rate_apt_type"]
+                seg_shift_id = sub_seg["shift_id"]
 
                 seg_duration = seg_end - seg_start
 
@@ -1307,19 +1381,33 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                 end_str = f"{seg_end // 60 % 24:02d}:{seg_end % 60:02d}"
 
                 # Determine shift type label (לפי ID, לא לפי שם)
+                # השתמש ב-shift_id של הסגמנט הספציפי, לא הרצף כולו
+                current_shift_id = seg_shift_id or chain_shift_id
+                current_actual_apt = seg_actual_apt if seg_actual_apt is not None else chain_actual_apt
+                current_rate_apt = seg_rate_apt if seg_rate_apt is not None else chain_rate_apt
+
+                # קביעת תווית סוג המשמרת
+                # is_shabbat מציין אם הזמן בפועל הוא בשבת (לפי כניסה/יציאה)
+                # זה חשוב יותר מסוג המשמרת כי משמרת שבת יכולה להמשיך אחרי צאת שבת
                 shift_type_label = ""
-                if _is_tagbur_shift(chain_shift_id):
+                if is_tagbur_shift(current_shift_id):
                     shift_type_label = "תגבור"
-                elif _is_implicit_tagbur(chain_shift_id, chain_actual_apt, chain_rate_apt):
+                elif is_implicit_tagbur(current_shift_id, current_actual_apt, current_rate_apt):
                     # משמרת שישי/שבת בדירה טיפולית עם תעריף דירה רגילה = תגבור
                     shift_type_label = "תגבור"
-                elif _is_night_shift(chain_shift_id):
+                elif is_night_shift(current_shift_id):
                     shift_type_label = "לילה"
-                elif _is_shabbat_shift(chain_shift_id) or is_shabbat:
+                elif is_shabbat:
+                    # הזמן בפועל הוא בתוך שבת (לפי שעות כניסה/יציאה)
                     shift_type_label = "שבת"
                 else:
+                    # אחרי צאת שבת או יום חול רגיל
                     shift_type_label = "חול"
-                
+
+                # השתמש בדירה הספציפית של הסגמנט, לא של הרצף כולו
+                display_apt_name = seg_apt_name if seg_apt_name else apt_name
+                display_apt_type = seg_apt_type if seg_apt_type is not None else chain_apt_type
+
                 chains.append({
                     "start_time": start_str,
                     "end_time": end_str,
@@ -1333,8 +1421,8 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     "calc175": seg_c175,
                     "calc200": seg_c200,
                     "type": "work",
-                    "apartment_name": apt_name,
-                    "apartment_type_id": chain_apt_type,
+                    "apartment_name": display_apt_name,
+                    "apartment_type_id": display_apt_type,
                     "shift_name": shift_name_str,
                     "shift_type": shift_type_label,
                     "segments": [(start_str, end_str, seg_label)],

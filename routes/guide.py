@@ -20,7 +20,8 @@ from core.logic import (
     get_available_months_for_person,
 )
 from core.history import get_minimum_wage_for_month
-from app_utils import get_daily_segments_data, aggregate_daily_segments_to_monthly, _is_implicit_tagbur, FRIDAY_SHIFT_ID, SHABBAT_SHIFT_ID
+from app_utils import get_daily_segments_data, aggregate_daily_segments_to_monthly
+from core.constants import is_implicit_tagbur, FRIDAY_SHIFT_ID, SHABBAT_SHIFT_ID
 from utils.utils import human_date, format_currency, month_range_ts
 import psycopg2.extras
 
@@ -371,7 +372,7 @@ def guide_view(
                 rate_apt_type = report.get('rate_apartment_type_id') or actual_apt_type
                 display_shift_name = report.get('shift_name', '')
 
-                if _is_implicit_tagbur(shift_id, actual_apt_type, rate_apt_type):
+                if is_implicit_tagbur(shift_id, actual_apt_type, rate_apt_type):
                     if shift_id == FRIDAY_SHIFT_ID:
                         display_shift_name = "משמרת תגבור שישי/ערב חג"
                     elif shift_id == SHABBAT_SHIFT_ID:

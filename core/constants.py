@@ -25,7 +25,6 @@ TAGBUR_FRIDAY_SHIFT_ID = 108    # משמרת תגבור שישי/ערב חג
 TAGBUR_SHABBAT_SHIFT_ID = 109   # משמרת תגבור שבת/חג
 
 # Special shifts
-HOSPITAL_ESCORT_SHIFT_ID = 120  # משמרת לווי בי"ח
 MEDICAL_ESCORT_SHIFT_ID = 148   # משמרת ליווי רפואי
 
 # =============================================================================
@@ -37,9 +36,6 @@ SHABBAT_SHIFT_IDS: Set[int] = {FRIDAY_SHIFT_ID, SHABBAT_SHIFT_ID}
 
 # משמרות תגבור
 TAGBUR_SHIFT_IDS: Set[int] = {TAGBUR_FRIDAY_SHIFT_ID, TAGBUR_SHABBAT_SHIFT_ID}
-
-# כל משמרות השבת (כולל תגבור)
-ALL_SHABBAT_SHIFT_IDS: Set[int] = SHABBAT_SHIFT_IDS | TAGBUR_SHIFT_IDS
 
 # =============================================================================
 # Apartment Types
@@ -117,11 +113,6 @@ def is_night_shift(shift_id: int | None) -> bool:
 def is_shabbat_shift(shift_id: int | None) -> bool:
     """Check if shift is a Friday/Shabbat shift (not tagbur) by ID."""
     return shift_id in SHABBAT_SHIFT_IDS
-
-
-def is_hospital_escort_shift(shift_id: int | None) -> bool:
-    """Check if shift is a hospital escort shift by ID."""
-    return shift_id == HOSPITAL_ESCORT_SHIFT_ID
 
 
 def is_medical_escort_shift(shift_id: int | None) -> bool:

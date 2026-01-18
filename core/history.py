@@ -6,7 +6,7 @@ Uses "save on change" approach - current data is used unless there's a historica
 from __future__ import annotations
 
 import logging
-from typing import Optional, Any, List, Dict
+from typing import Optional, Any
 from datetime import datetime
 
 import psycopg2.extras
@@ -714,78 +714,3 @@ def get_minimum_wage_for_month(conn, year: int, month: int) -> float:
         cursor.close()
 
 
-def apply_historical_overrides(
-    conn,
-    reports: List[Dict],
-    person_id: int,
-    year: int,
-    month: int
-) -> List[Dict]:
-    """
-    החלת נתונים היסטוריים על דיווחים.
-
-    מעדכן את הדיווחים עם:
-    - סטטוס נישואין היסטורי
-    - סוג דירה היסטורי
-    - תעריפי משמרת היסטוריים
-
-    פרמטרים:
-        conn: חיבור לבסיס הנתונים
-        reports: רשימת דיווחים (כמילונים)
-        person_id: מזהה העובד
-        year: שנה
-        month: חודש
-
-    מחזיר:
-        רשימת דיווחים מעודכנת עם הנתונים ההיסטוריים
-    """
-    if not reports:
-        return []
-
-    # שליפת סטטוס נישואין היסטורי
-    historical_person = get_person_status_for_month(conn, person_id, year, month)
-    historical_is_married = historical_person.get("is_married")
-
-    # בניית מטמון סוגי דירות היסטוריים
-    apartment_ids = {r.get("apartment_id") for r in reports if r.get("apartment_id")}
-    apartment_type_cache = {}
-    for apt_id in apartment_ids:
-        hist_type = get_apartment_type_for_month(conn, apt_id, year, month)
-        if hist_type is not None:
-            apartment_type_cache[apt_id] = hist_type
-
-    # בניית מטמון תעריפי משמרות היסטוריים
-    shift_rates_cache = get_all_shift_rates_for_month(conn, year, month)
-
-    # החלת הנתונים ההיסטוריים על כל דיווח
-    processed_reports = []
-    for r in reports:
-        r_dict = dict(r) if not isinstance(r, dict) else r.copy()
-
-        # עדכון סטטוס נישואין
-        if historical_is_married is not None:
-            r_dict["is_married"] = historical_is_married
-
-        # עדכון סוג דירה - עדיפות: rate_apartment_type_id > היסטורי > נוכחי
-        rate_apt_type = r_dict.get("rate_apartment_type_id")
-        if rate_apt_type:
-            r_dict["apartment_type_id"] = rate_apt_type
-        else:
-            apt_id = r_dict.get("apartment_id")
-            if apt_id and apt_id in apartment_type_cache:
-                old_val = r_dict.get("apartment_type_id")
-                r_dict["apartment_type_id"] = apartment_type_cache[apt_id]
-                if old_val != apartment_type_cache[apt_id]:
-                    logger.debug(f"Historical override for apt {apt_id}: {old_val} -> {apartment_type_cache[apt_id]} ({year}/{month})")
-
-        # עדכון תעריפי משמרת
-        shift_type_id = r_dict.get("shift_type_id")
-        if shift_type_id and shift_type_id in shift_rates_cache:
-            rate_info = shift_rates_cache[shift_type_id]
-            r_dict["shift_rate"] = rate_info.get("rate")
-            r_dict["shift_is_minimum_wage"] = rate_info.get("is_minimum_wage")
-            r_dict["shift_wage_percentage"] = rate_info.get("wage_percentage")
-
-        processed_reports.append(r_dict)
-
-    return processed_reports
