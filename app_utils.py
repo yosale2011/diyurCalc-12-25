@@ -1976,7 +1976,8 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             chain_actual_apt = list(chain_actual_apt_types)[0] if chain_actual_apt_types else None
             chain_rate_apt = list(chain_rate_apt_types)[0] if chain_rate_apt_types else None
             chain_shift_id = list(chain_shift_ids)[0] if chain_shift_ids else None
-            shift_name_str = ", ".join(sorted(chain_shift_names)) if chain_shift_names else ""
+            # שם המשמרת הספציפי של ה-chain (לא כל המשמרות של היום)
+            shift_name_str = shift_names_map.get(chain_shift_id, "") if chain_shift_id else ""
 
             # Helper function: Split a rate segment by apartment boundaries
             def split_segment_by_apartments(seg_start, seg_end, seg_label, is_shabbat, segs):
@@ -2153,6 +2154,9 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     # בשורה האחרונה, אם יש סיבת שבירה, היא עדיפה
                     final_reason = break_reason
 
+                # שם המשמרת הספציפי של הסגמנט (לא כל המשמרות של היום)
+                seg_shift_name = shift_names_map.get(current_shift_id, "") if current_shift_id else shift_name_str
+
                 chains.append({
                     "start_time": start_str,
                     "end_time": end_str,
@@ -2168,9 +2172,9 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                     "type": "work",
                     "apartment_name": display_apt_name,
                     "apartment_type_id": display_apt_type,
-                    "shift_name": shift_name_str,
+                    "shift_name": seg_shift_name,
                     "shift_type": shift_type_label,
-                    "shift_id": chain_shift_id,  # For identifying special shifts like medical escort
+                    "shift_id": current_shift_id,  # For identifying special shifts like medical escort
                     "is_special_hourly": shift_is_special_hourly.get(chain_shift_id, False),  # For variable rate tracking
                     "segments": [(start_str, end_str, seg_label)],
                     "break_reason": final_reason,
