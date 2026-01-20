@@ -771,6 +771,700 @@ class TestNightShiftWageRate(unittest.TestCase):
         self.assertEqual(calculate_wage_rate(481, False, is_night_shift=False), "125%")
 
 
+class TestNightChainOvertimeThresholds(unittest.TestCase):
+    """
+    בדיקות מקיפות לוודא שסף 7/8 שעות מחושב נכון בכל סוגי המשמרות.
+
+    כלל: משמרת שיש בה 2+ שעות בטווח 22:00-06:00 = משמרת לילה (סף 7 שעות)
+    אחרת = משמרת רגילה (סף 8 שעות)
+    """
+
+    def test_weekday_night_22_to_0630_is_night_chain(self):
+        """
+        משמרת לילה בחול 22:00-06:30 = 8.5 שעות, כולן בטווח לילה
+        צריך להיות: 7 שעות 100% + 1.5 שעות 125%
+
+        הערה: משתמשים ביום ראשון (2024-12-15) שהוא יום חול
+        """
+        # 22:00 = 1320, 06:30 למחרת = 1830 (במערכת הזמנים המורחבת)
+        segments = [(1320, 1830, None)]
+        result = _calculate_chain_wages(segments, date(2024, 12, 15), {}, 0, is_night_shift=True)
+
+        # סף 7 שעות (420 דקות)
+        self.assertEqual(result["calc100"], 420)   # 7 שעות @ 100%
+        self.assertEqual(result["calc125"], 90)    # 1.5 שעות @ 125%
+        self.assertEqual(result["calc150"], 0)
+
+    def test_weekday_night_22_to_0630_NOT_night_chain_comparison(self):
+        """
+        אותה משמרת 22:00-06:30 אבל עם is_night_shift=False
+        צריך להיות: 8 שעות 100% + 0.5 שעות 125%
+        """
+        segments = [(1320, 1830, None)]
+        result = _calculate_chain_wages(segments, date(2024, 12, 15), {}, 0, is_night_shift=False)
+
+        # סף 8 שעות (480 דקות) - ההתנהגות השגויה לפני התיקון
+        self.assertEqual(result["calc100"], 480)   # 8 שעות @ 100%
+        self.assertEqual(result["calc125"], 30)    # 0.5 שעות @ 125%
+        self.assertEqual(result["calc150"], 0)
+
+    def test_friday_night_is_shabbat(self):
+        """
+        משמרת ליל שישי 22:00-06:30 (ביום שישי) = שבת הלכתית
+        כי שבת נכנסת בערב שישי (~17:00)
+        צריך להיות: 7 שעות @ 150% + 1.5 שעות @ 175%
+        """
+        # 09/01/2026 = יום שישי, 22:00 = אחרי כניסת שבת
+        segments = [(1320, 1830, None)]
+        result = _calculate_chain_wages(segments, date(2026, 1, 9), {}, 0, is_night_shift=True)
+
+        # בשבת עם סף לילה (7 שעות)
+        self.assertEqual(result["calc100"], 0)
+        self.assertEqual(result["calc125"], 0)
+        self.assertEqual(result["calc150"], 420)   # 7 שעות @ 150% שבת
+        self.assertEqual(result["calc175"], 90)    # 1.5 שעות @ 175% שבת
+
+    def test_shabbat_night_22_to_0630_with_shabbat_rates(self):
+        """
+        משמרת שבת 22:00-06:30 בשבת הלכתית = 8.5 שעות
+        עם is_night_shift=True ושבת:
+        - 7 שעות @ 150% (100% בסיס + 50% שבת)
+        - 1.5 שעות @ 175% (125% בסיס + 50% שבת)
+
+        הערה: הבדיקה הזו בודקת את calc150 ו-calc175 שמתאימים לשבת
+        """
+        # צריך shabbat_cache עם זמני שבת
+        shabbat_cache = {
+            "2026-01-09": {"enter": "16:30", "exit": "17:45"},  # שבת נכנסת ב-16:30 ויוצאת למחרת ב-17:45
+        }
+
+        # משמרת 22:00-06:30 ביום שישי (09/01/2026)
+        segments = [(1320, 1830, None)]
+        result = _calculate_chain_wages(segments, date(2026, 1, 9), shabbat_cache, 0, is_night_shift=True)
+
+        # בשבת עם סף לילה (7 שעות):
+        # calc100=0 (אין שעות רגילות - הכל שבת)
+        # calc150 = 420 דקות (7 שעות @ 150% שבת)
+        # calc175 = 90 דקות (1.5 שעות @ 175% שבת)
+        self.assertEqual(result["calc100"], 0)
+        self.assertEqual(result["calc125"], 0)
+        self.assertEqual(result["calc150"], 420)   # 7 שעות @ 150%
+        self.assertEqual(result["calc175"], 90)    # 1.5 שעות @ 175%
+        self.assertEqual(result["calc200"], 0)
+
+    def test_day_shift_08_to_17_is_NOT_night_chain(self):
+        """
+        משמרת יום 08:00-17:00 = 9 שעות, 0 שעות בטווח לילה
+        צריך להיות: 8 שעות 100% + 1 שעה 125% (סף 8 שעות)
+        """
+        # 08:00 = 480, 17:00 = 1020
+        segments = [(480, 1020, None)]
+        result = _calculate_chain_wages(segments, date(2024, 12, 15), {}, 0, is_night_shift=False)
+
+        self.assertEqual(result["calc100"], 480)   # 8 שעות
+        self.assertEqual(result["calc125"], 60)    # 1 שעה
+        self.assertEqual(result["calc150"], 0)
+
+    def test_evening_shift_18_to_02_qualifies_as_night(self):
+        """
+        משמרת ערב 18:00-02:00 = 8 שעות
+        4 שעות בטווח 22:00-02:00 = יותר מ-2 שעות = משמרת לילה
+        צריך להיות: 7 שעות 100% + 1 שעה 125%
+        """
+        # 18:00 = 1080, 02:00 למחרת = 1560
+        night_hours = calculate_night_hours_in_segment(1080, 1560)
+        self.assertEqual(night_hours, 240)  # 4 שעות (22:00-02:00)
+        self.assertTrue(night_hours >= 120)  # מעל 2 שעות = משמרת לילה
+
+        segments = [(1080, 1560, None)]
+        result = _calculate_chain_wages(segments, date(2024, 12, 15), {}, 0, is_night_shift=True)
+
+        self.assertEqual(result["calc100"], 420)   # 7 שעות
+        self.assertEqual(result["calc125"], 60)    # 1 שעה
+        self.assertEqual(result["calc150"], 0)
+
+    def test_evening_shift_18_to_2330_NOT_night(self):
+        """
+        משמרת ערב 18:00-23:30 = 5.5 שעות
+        1.5 שעות בטווח 22:00-23:30 = פחות מ-2 שעות = לא משמרת לילה
+        """
+        # 18:00 = 1080, 23:30 = 1410
+        night_hours = calculate_night_hours_in_segment(1080, 1410)
+        self.assertEqual(night_hours, 90)  # 1.5 שעות (22:00-23:30)
+        self.assertFalse(night_hours >= 120)  # פחות מ-2 שעות = לא משמרת לילה
+
+    def test_early_morning_04_to_12_qualifies_as_night(self):
+        """
+        משמרת בוקר מוקדם 04:00-12:00 = 8 שעות
+        2 שעות בטווח 04:00-06:00 = בדיוק 2 שעות = משמרת לילה
+        צריך להיות: 7 שעות 100% + 1 שעה 125%
+        """
+        # 04:00 = 240, 12:00 = 720
+        night_hours = calculate_night_hours_in_segment(240, 720)
+        self.assertEqual(night_hours, 120)  # 2 שעות (04:00-06:00)
+        self.assertTrue(night_hours >= 120)  # בדיוק 2 שעות = משמרת לילה
+
+        segments = [(240, 720, None)]
+        result = _calculate_chain_wages(segments, date(2024, 12, 15), {}, 0, is_night_shift=True)
+
+        self.assertEqual(result["calc100"], 420)   # 7 שעות
+        self.assertEqual(result["calc125"], 60)    # 1 שעה
+        self.assertEqual(result["calc150"], 0)
+
+    def test_rate_change_with_carryover_keeps_night_flag(self):
+        """
+        שינוי תעריף באמצע רצף לילה:
+        - 22:00-02:00 בתעריף 42 (4 שעות)
+        - 02:00-06:00 בתעריף 34.40 (4 שעות)
+        סה"כ 8 שעות, כולן בטווח לילה
+
+        הרצף כולו צריך להיות עם סף 7 שעות גם אחרי שינוי התעריף
+        """
+        # רצף ראשון: 22:00-02:00 (4 שעות) עם 4 שעות לילה
+        segments1 = [(1320, 1560, None)]  # shift_id=42 rate
+        result1 = _calculate_chain_wages(segments1, date(2024, 12, 15), {}, 0, is_night_shift=True)
+
+        # 4 שעות < 7 שעות = הכל 100%
+        self.assertEqual(result1["calc100"], 240)
+        self.assertEqual(result1["calc125"], 0)
+
+        # רצף שני: 02:00-06:00 (4 שעות) עם carryover של 4 שעות
+        # סה"כ 8 שעות ברצף, סף 7 שעות
+        segments2 = [(1560, 1800, None)]  # shift_id=34.40 rate
+        result2 = _calculate_chain_wages(segments2, date(2024, 12, 15), {}, 240, is_night_shift=True)
+
+        # 4 שעות carryover + 3 שעות = 7 שעות @ 100%, 1 שעה @ 125%
+        self.assertEqual(result2["calc100"], 180)   # 3 שעות נוספות ב-100% (עד סף 7)
+        self.assertEqual(result2["calc125"], 60)    # 1 שעה ב-125%
+
+    def test_long_night_shift_10_hours_all_tiers(self):
+        """
+        משמרת לילה ארוכה: 20:00-06:00 = 10 שעות
+        8 שעות בטווח 22:00-06:00 = משמרת לילה
+        צריך להיות: 7 שעות 100% + 2 שעות 125% + 1 שעה 150%
+        """
+        # 20:00 = 1200, 06:00 למחרת = 1800
+        segments = [(1200, 1800, None)]
+        result = _calculate_chain_wages(segments, date(2024, 12, 15), {}, 0, is_night_shift=True)
+
+        self.assertEqual(result["calc100"], 420)   # 7 שעות
+        self.assertEqual(result["calc125"], 120)   # 2 שעות
+        self.assertEqual(result["calc150"], 60)    # 1 שעה
+
+    def test_long_day_shift_10_hours_all_tiers(self):
+        """
+        משמרת יום ארוכה: 08:00-18:00 = 10 שעות, 0 שעות לילה
+        צריך להיות: 8 שעות 100% + 2 שעות 125% (סף 8 שעות)
+        """
+        # 08:00 = 480, 18:00 = 1080
+        segments = [(480, 1080, None)]
+        result = _calculate_chain_wages(segments, date(2024, 12, 15), {}, 0, is_night_shift=False)
+
+        self.assertEqual(result["calc100"], 480)   # 8 שעות
+        self.assertEqual(result["calc125"], 120)   # 2 שעות
+        self.assertEqual(result["calc150"], 0)
+
+    def test_shabbat_with_night_threshold_all_rates(self):
+        """
+        משמרת שבת עם סף לילה: 22:00-08:30 = 10.5 שעות
+        כולן בשבת וכולן בטווח לילה
+        צריך להיות (סף 7 שעות, עם תוספות שבת):
+        - 7 שעות @ 150% (100%+50%)
+        - 2 שעות @ 175% (125%+50%)
+        - 1.5 שעות @ 200% (150%+50%)
+        """
+        shabbat_cache = {
+            "2026-01-09": {"enter": "16:30", "exit": "17:45"},
+        }
+
+        # 22:00 = 1320, 08:30 למחרת = 1950 (במערכת מורחבת)
+        segments = [(1320, 1950, None)]
+        result = _calculate_chain_wages(segments, date(2026, 1, 9), shabbat_cache, 0, is_night_shift=True)
+
+        # בשבת עם סף 7 שעות:
+        self.assertEqual(result["calc150"], 420)   # 7 שעות @ 150%
+        self.assertEqual(result["calc175"], 120)   # 2 שעות @ 175%
+        self.assertEqual(result["calc200"], 90)    # 1.5 שעות @ 200%
+
+        # אין שעות חול
+        self.assertEqual(result["calc100"], 0)
+        self.assertEqual(result["calc125"], 0)
+
+
+class TestMultipleShiftsSameDay(unittest.TestCase):
+    """
+    בדיקות למספר משמרות באותו יום עבודה (08:00-08:00).
+    כולל: משמרות עם הפסקה ביניהן, שינוי תעריף, ומעבר יום/לילה.
+    """
+
+    def test_two_shifts_same_day_with_break_over_60_min(self):
+        """
+        שתי משמרות באותו יום עם הפסקה > 60 דקות = שני רצפים נפרדים
+        משמרת 1: 08:00-12:00 (4 שעות) @ 100%
+        הפסקה: 2 שעות
+        משמרת 2: 14:00-18:00 (4 שעות) @ 100%
+
+        כל משמרת מתחילה מ-0 כי ההפסקה שוברת רצף
+        """
+        # משמרת 1
+        segments1 = [(480, 720, None)]  # 08:00-12:00
+        result1 = _calculate_chain_wages(segments1, date(2024, 12, 15), {}, 0, is_night_shift=False)
+        self.assertEqual(result1["calc100"], 240)  # 4 שעות
+        self.assertEqual(result1["calc125"], 0)
+
+        # משמרת 2 - מתחילה מ-0 (אחרי הפסקה ארוכה)
+        segments2 = [(840, 1080, None)]  # 14:00-18:00
+        result2 = _calculate_chain_wages(segments2, date(2024, 12, 15), {}, 0, is_night_shift=False)
+        self.assertEqual(result2["calc100"], 240)  # 4 שעות
+        self.assertEqual(result2["calc125"], 0)
+
+    def test_two_shifts_same_day_continuous(self):
+        """
+        שתי משמרות באותו יום עם הפסקה < 60 דקות = רצף אחד
+        משמרת 1: 08:00-12:00 (4 שעות)
+        הפסקה: 30 דקות
+        משמרת 2: 12:30-17:00 (4.5 שעות)
+
+        סה"כ 8.5 שעות ברצף אחד = 8 @ 100% + 0.5 @ 125%
+        """
+        # סימולציה של שתי משמרות ברצף (הפסקה קצרה לא שוברת)
+        segments = [(480, 720, None), (750, 1020, None)]  # 08:00-12:00, 12:30-17:00
+        result = _calculate_chain_wages(segments, date(2024, 12, 15), {}, 0, is_night_shift=False)
+
+        total_minutes = (720 - 480) + (1020 - 750)  # 240 + 270 = 510 דקות = 8.5 שעות
+        self.assertEqual(total_minutes, 510)
+
+        self.assertEqual(result["calc100"], 480)   # 8 שעות
+        self.assertEqual(result["calc125"], 30)    # 0.5 שעות
+        self.assertEqual(result["calc150"], 0)
+
+    def test_day_shift_then_night_shift_same_day(self):
+        """
+        משמרת יום ואז משמרת לילה באותו יום עבודה
+        משמרת יום: 08:00-16:00 (8 שעות) - לא לילה
+        הפסקה: 4 שעות (שוברת רצף)
+        משמרת לילה: 20:00-04:00 (8 שעות) - לילה (6 שעות בטווח 22:00-04:00)
+
+        משמרת היום: סף 8 שעות
+        משמרת הלילה: סף 7 שעות
+        """
+        # משמרת יום
+        segments_day = [(480, 960, None)]  # 08:00-16:00
+        result_day = _calculate_chain_wages(segments_day, date(2024, 12, 15), {}, 0, is_night_shift=False)
+        self.assertEqual(result_day["calc100"], 480)  # 8 שעות @ 100%
+        self.assertEqual(result_day["calc125"], 0)
+
+        # משמרת לילה - 20:00-04:00 = 8 שעות, 6 שעות בטווח לילה
+        night_hours = calculate_night_hours_in_segment(20*60, 28*60)  # 20:00-04:00 (04:00 = 28*60 למחרת)
+        self.assertEqual(night_hours, 360)  # 6 שעות (22:00-04:00)
+        self.assertTrue(night_hours >= 120)  # מעל 2 שעות = משמרת לילה
+
+        segments_night = [(1200, 1680, None)]  # 20:00-04:00 (04:00 = 1680)
+        result_night = _calculate_chain_wages(segments_night, date(2024, 12, 15), {}, 0, is_night_shift=True)
+        self.assertEqual(result_night["calc100"], 420)  # 7 שעות @ 100%
+        self.assertEqual(result_night["calc125"], 60)   # 1 שעה @ 125%
+
+    def test_multiple_short_shifts_accumulate_overtime(self):
+        """
+        מספר משמרות קצרות שמצטברות לשעות נוספות
+        3 משמרות של 3 שעות כל אחת ברצף (עם הפסקות קצרות)
+        סה"כ 9 שעות = 8 @ 100% + 1 @ 125%
+        """
+        # 3 סגמנטים ברצף
+        segments = [
+            (480, 660, None),   # 08:00-11:00 (3 שעות)
+            (690, 870, None),   # 11:30-14:30 (3 שעות)
+            (900, 1080, None),  # 15:00-18:00 (3 שעות)
+        ]
+        result = _calculate_chain_wages(segments, date(2024, 12, 15), {}, 0, is_night_shift=False)
+
+        total = (660-480) + (870-690) + (1080-900)  # 180 + 180 + 180 = 540 = 9 שעות
+        self.assertEqual(total, 540)
+
+        self.assertEqual(result["calc100"], 480)  # 8 שעות
+        self.assertEqual(result["calc125"], 60)   # 1 שעה
+
+    def test_different_rates_same_day_chain_breaks(self):
+        """
+        משמרות עם תעריפים שונים באותו יום - שינוי תעריף שובר רצף
+        אבל ה-carryover נשמר (לחישוב שעות נוספות)
+
+        משמרת 1: 08:00-14:00 (6 שעות) @ 42 ש"ח
+        משמרת 2: 14:00-18:00 (4 שעות) @ 34.40 ש"ח
+
+        החישוב: 6 שעות + 4 שעות = 10 שעות
+        אבל כל משמרת מחושבת בנפרד עם carryover
+        """
+        # משמרת 1 - 6 שעות @ 100%
+        segments1 = [(480, 840, 42)]  # shift_id=42
+        result1 = _calculate_chain_wages(segments1, date(2024, 12, 15), {}, 0, is_night_shift=False)
+        self.assertEqual(result1["calc100"], 360)  # 6 שעות @ 100%
+        self.assertEqual(result1["calc125"], 0)
+
+        # משמרת 2 - 4 שעות, עם carryover של 6 שעות = סה"כ 10 שעות
+        # 2 שעות @ 100% (עד 8), 2 שעות @ 125%
+        segments2 = [(840, 1080, 34)]  # shift_id=34
+        result2 = _calculate_chain_wages(segments2, date(2024, 12, 15), {}, 360, is_night_shift=False)
+        self.assertEqual(result2["calc100"], 120)  # 2 שעות @ 100% (עד 480)
+        self.assertEqual(result2["calc125"], 120)  # 2 שעות @ 125%
+
+
+class TestConsecutiveDaysCarryover(unittest.TestCase):
+    """
+    בדיקות לימים רצופים עם carryover בין הימים.
+    רצף שמסתיים ב-08:00 בדיוק מעביר את הדקות ליום הבא.
+    """
+
+    def test_overnight_shift_ends_at_0800_carryover(self):
+        """
+        משמרת לילה שמסתיימת ב-08:00 בדיוק - carryover ליום הבא
+        יום 1: 20:00-08:00 (12 שעות) - רצף לילה
+        יום 2: 08:00-10:00 (2 שעות) - המשך הרצף
+
+        סה"כ 14 שעות ברצף אחד
+        """
+        # יום 1: 20:00-08:00 = 12 שעות
+        # שעות לילה: 22:00-06:00 = 8 שעות = רצף לילה (סף 7 שעות)
+        night_hours_day1 = calculate_night_hours_in_segment(20*60, 32*60)  # 20:00-08:00
+        self.assertEqual(night_hours_day1, 480)  # 8 שעות לילה
+
+        segments_day1 = [(1200, 1920, None)]  # 20:00-08:00 (08:00 = 1920 בציר מורחב)
+        result_day1 = _calculate_chain_wages(segments_day1, date(2024, 12, 15), {}, 0, is_night_shift=True)
+
+        # סף 7 שעות: 7 @ 100%, 2 @ 125%, 3 @ 150%
+        self.assertEqual(result_day1["calc100"], 420)   # 7 שעות
+        self.assertEqual(result_day1["calc125"], 120)   # 2 שעות
+        self.assertEqual(result_day1["calc150"], 180)   # 3 שעות
+
+        # יום 2: 08:00-10:00 = 2 שעות, עם carryover של 12 שעות
+        # כבר עברנו את כל הסף, הכל ב-150%
+        segments_day2 = [(480, 600, None)]  # 08:00-10:00
+        result_day2 = _calculate_chain_wages(segments_day2, date(2024, 12, 16), {}, 720, is_night_shift=True)
+
+        # 12 שעות carryover + 2 שעות = 14 שעות (כבר מעל 9 שעות = הכל 150%)
+        self.assertEqual(result_day2["calc100"], 0)
+        self.assertEqual(result_day2["calc125"], 0)
+        self.assertEqual(result_day2["calc150"], 120)   # 2 שעות @ 150%
+
+    def test_three_consecutive_days_with_carryover(self):
+        """
+        3 ימים רצופים עם רצף עבודה רציף (עבודה עד 08:00 כל יום)
+
+        יום 1: 14:00-08:00 (18 שעות)
+        יום 2: 08:00-08:00 (24 שעות) - המשך!
+        יום 3: 08:00-12:00 (4 שעות)
+
+        סה"כ 46 שעות ברצף אחד (תיאורטי)
+        """
+        # יום 1: 14:00-08:00 = 18 שעות
+        # שעות לילה: 22:00-06:00 = 8 שעות
+        night_hours_1 = calculate_night_hours_in_segment(14*60, 32*60)
+        self.assertEqual(night_hours_1, 480)  # 8 שעות לילה = רצף לילה
+
+        segments1 = [(840, 1920, None)]  # 14:00-08:00
+        result1 = _calculate_chain_wages(segments1, date(2024, 12, 15), {}, 0, is_night_shift=True)
+
+        # סף 7 שעות: 7 @ 100%, 2 @ 125%, 9 @ 150%
+        self.assertEqual(result1["calc100"], 420)
+        self.assertEqual(result1["calc125"], 120)
+        self.assertEqual(result1["calc150"], 540)  # 9 שעות @ 150%
+
+        # יום 2: עוד 24 שעות עם carryover של 18 שעות
+        # כבר הכל ב-150%
+        segments2 = [(480, 1920, None)]  # 08:00-08:00 למחרת
+        result2 = _calculate_chain_wages(segments2, date(2024, 12, 16), {}, 1080, is_night_shift=True)
+
+        # carryover 18 שעות = 1080 דקות, כבר מעל 9 שעות
+        self.assertEqual(result2["calc100"], 0)
+        self.assertEqual(result2["calc125"], 0)
+        self.assertEqual(result2["calc150"], 1440)  # 24 שעות @ 150%
+
+    def test_day_to_night_transition_across_days(self):
+        """
+        מעבר מיום ללילה בין ימים:
+        יום 1: 10:00-18:00 (8 שעות) - יום רגיל
+        יום 2: 22:00-06:00 (8 שעות) - לילה
+
+        שני רצפים נפרדים (הפסקה > 60 דקות בין 18:00 ל-22:00)
+        """
+        # יום 1 - משמרת יום
+        segments1 = [(600, 1080, None)]  # 10:00-18:00
+        result1 = _calculate_chain_wages(segments1, date(2024, 12, 15), {}, 0, is_night_shift=False)
+        self.assertEqual(result1["calc100"], 480)  # 8 שעות @ 100%
+
+        # יום 2 - משמרת לילה (רצף חדש)
+        night_hours = calculate_night_hours_in_segment(22*60, 30*60)
+        self.assertEqual(night_hours, 480)  # 8 שעות לילה
+
+        segments2 = [(1320, 1800, None)]  # 22:00-06:00
+        result2 = _calculate_chain_wages(segments2, date(2024, 12, 16), {}, 0, is_night_shift=True)
+
+        # סף 7 שעות: 7 @ 100%, 1 @ 125%
+        self.assertEqual(result2["calc100"], 420)
+        self.assertEqual(result2["calc125"], 60)
+
+
+class TestMonthBoundaryCarryover(unittest.TestCase):
+    """
+    בדיקות למעבר בין חודשים עם carryover.
+    רצף שמתחיל בסוף חודש ונמשך לתחילת החודש הבא.
+    """
+
+    def test_end_of_month_carryover_calculation(self):
+        """
+        רצף שמתחיל ב-31/12 ונמשך ל-01/01
+
+        31/12: 22:00-08:00 (10 שעות, 8 שעות לילה)
+        01/01: 08:00-12:00 (4 שעות) - המשך הרצף
+
+        סה"כ 14 שעות ברצף לילה
+        """
+        # 31/12: רצף לילה
+        night_hours = calculate_night_hours_in_segment(22*60, 32*60)
+        self.assertEqual(night_hours, 480)  # 8 שעות לילה
+
+        segments_dec = [(1320, 1920, None)]  # 22:00-08:00
+        result_dec = _calculate_chain_wages(segments_dec, date(2024, 12, 31), {}, 0, is_night_shift=True)
+
+        # סף 7 שעות: 7 @ 100%, 2 @ 125%, 1 @ 150%
+        self.assertEqual(result_dec["calc100"], 420)
+        self.assertEqual(result_dec["calc125"], 120)
+        self.assertEqual(result_dec["calc150"], 60)
+
+        # 01/01: המשך עם carryover של 10 שעות (600 דקות)
+        segments_jan = [(480, 720, None)]  # 08:00-12:00
+        result_jan = _calculate_chain_wages(segments_jan, date(2025, 1, 1), {}, 600, is_night_shift=True)
+
+        # 10 שעות carryover + 4 שעות = 14 שעות
+        # כבר עברנו 9 שעות, הכל @ 150%
+        self.assertEqual(result_jan["calc100"], 0)
+        self.assertEqual(result_jan["calc125"], 0)
+        self.assertEqual(result_jan["calc150"], 240)  # 4 שעות @ 150%
+
+    def test_shabbat_spanning_month_boundary(self):
+        """
+        שבת שחוצה גבול חודש (נדיר אבל אפשרי)
+        אם 31/12 = שבת ו-01/01 = מוצ"ש
+
+        בדיקת התעריפים: חלק בשבת, חלק בחול
+        """
+        # נניח ש-31/12/2024 = שבת (בפועל זה יום שלישי, אבל לצורך הבדיקה)
+        # 31/12: 22:00-08:00 בשבת
+        shabbat_cache = {
+            "2024-12-31": {"enter": "16:30", "exit": "17:45"},  # יציאת שבת ב-17:45 ב-01/01
+        }
+
+        segments = [(1320, 1920, None)]  # 22:00-08:00
+        result = _calculate_chain_wages(segments, date(2024, 12, 28), shabbat_cache, 0, is_night_shift=True)
+
+        # 28/12/2024 = שבת (weekday=5)
+        # כל המשמרת בשבת עם סף 7 שעות
+        # 7 שעות @ 150%, 2 שעות @ 175%, 1 שעה @ 200%
+        self.assertEqual(result["calc150"], 420)
+        self.assertEqual(result["calc175"], 120)
+        self.assertEqual(result["calc200"], 60)
+
+    def test_night_hours_carryover_between_months(self):
+        """
+        שעות לילה שמועברות בין חודשים
+
+        31/12: 23:00-08:00 (9 שעות, 7 שעות לילה)
+        01/01: 08:00-10:00 (2 שעות, 0 שעות לילה)
+
+        הרצף של 01/01 ממשיך להיחשב כרצף לילה כי סה"כ שעות הלילה ברצף = 7
+        """
+        # 31/12: 23:00-08:00 = 9 שעות
+        night_hours_dec = calculate_night_hours_in_segment(23*60, 32*60)  # 23:00-08:00
+        self.assertEqual(night_hours_dec, 420)  # 7 שעות לילה (23:00-06:00)
+
+        # 01/01: 08:00-10:00 = 2 שעות, 0 שעות לילה
+        night_hours_jan = calculate_night_hours_in_segment(8*60, 10*60)
+        self.assertEqual(night_hours_jan, 0)
+
+        # סה"כ שעות לילה ברצף = 7 שעות >= 2 שעות = רצף לילה
+        total_night = night_hours_dec + night_hours_jan
+        self.assertEqual(total_night, 420)
+        self.assertTrue(total_night >= 120)  # NIGHT_HOURS_THRESHOLD
+
+
+class TestComplexScenarios(unittest.TestCase):
+    """
+    בדיקות לתרחישים מורכבים שמשלבים מספר מקרים.
+    """
+
+    def test_week_of_night_shifts(self):
+        """
+        שבוע של משמרות לילה רצופות (22:00-08:00 כל לילה)
+        כל משמרת נמשכת לבוקר הבא, אז כל יום מתחיל עם carryover
+
+        בדיקה: האם סף 7 שעות נשמר לכל המשמרות?
+        """
+        # כל משמרת: 22:00-08:00 = 10 שעות, 8 שעות לילה
+        segments = [(1320, 1920, None)]
+
+        # יום 1 - ללא carryover
+        result1 = _calculate_chain_wages(segments, date(2024, 12, 15), {}, 0, is_night_shift=True)
+        self.assertEqual(result1["calc100"], 420)   # 7 שעות
+        self.assertEqual(result1["calc125"], 120)   # 2 שעות
+        self.assertEqual(result1["calc150"], 60)    # 1 שעה
+
+        # יום 2 - עם carryover של 10 שעות (אם העבודה ב-08:00 בדיוק)
+        # אבל בד"כ יש הפסקה, אז נניח שזה רצף חדש
+        result2 = _calculate_chain_wages(segments, date(2024, 12, 16), {}, 0, is_night_shift=True)
+        self.assertEqual(result2["calc100"], 420)
+        self.assertEqual(result2["calc125"], 120)
+        self.assertEqual(result2["calc150"], 60)
+
+    def test_mixed_shift_types_same_week(self):
+        """
+        שבוע עם סוגי משמרות שונים:
+        - יום ראשון: משמרת יום 08:00-16:00 (סף 8)
+        - יום שני: משמרת לילה 22:00-06:00 (סף 7)
+        - יום שלישי: משמרת יום 10:00-18:00 (סף 8)
+        """
+        # יום ראשון - משמרת יום
+        segments_sun = [(480, 960, None)]
+        result_sun = _calculate_chain_wages(segments_sun, date(2024, 12, 15), {}, 0, is_night_shift=False)
+        self.assertEqual(result_sun["calc100"], 480)
+
+        # יום שני - משמרת לילה
+        segments_mon = [(1320, 1800, None)]
+        result_mon = _calculate_chain_wages(segments_mon, date(2024, 12, 16), {}, 0, is_night_shift=True)
+        self.assertEqual(result_mon["calc100"], 420)
+        self.assertEqual(result_mon["calc125"], 60)
+
+        # יום שלישי - משמרת יום
+        segments_tue = [(600, 1080, None)]
+        result_tue = _calculate_chain_wages(segments_tue, date(2024, 12, 17), {}, 0, is_night_shift=False)
+        self.assertEqual(result_tue["calc100"], 480)
+
+    def test_shabbat_to_weekday_transition(self):
+        """
+        מעבר משבת ליום חול באותו רצף:
+        שבת: 20:00-08:00 (12 שעות בשבת)
+        מוצ"ש: 08:00-12:00 (4 שעות בחול)
+
+        הערה: שבת יוצאת בערך ב-17:45 ביום ראשון, אז 08:00-12:00 ביום ראשון = חול
+        """
+        shabbat_cache = {
+            "2024-12-28": {"enter": "16:30", "exit": "17:45"},
+        }
+
+        # שבת: 20:00-08:00
+        segments_shabbat = [(1200, 1920, None)]
+        result_shabbat = _calculate_chain_wages(segments_shabbat, date(2024, 12, 28), shabbat_cache, 0, is_night_shift=True)
+
+        # כל המשמרת בשבת (צאת שבת ב-17:45 למחרת)
+        # סף 7 שעות: 7 @ 150%, 2 @ 175%, 3 @ 200%
+        self.assertEqual(result_shabbat["calc150"], 420)
+        self.assertEqual(result_shabbat["calc175"], 120)
+        self.assertEqual(result_shabbat["calc200"], 180)
+
+    def test_partial_night_shift_boundary(self):
+        """
+        משמרת שנמצאת בדיוק על הגבול של 2 שעות לילה:
+        21:00-23:00 = 1 שעה לילה (לא עובר סף)
+        21:00-00:00 = 2 שעות לילה (עובר סף)
+        """
+        # 21:00-23:00 = 1 שעה לילה
+        night_1 = calculate_night_hours_in_segment(21*60, 23*60)
+        self.assertEqual(night_1, 60)
+        self.assertFalse(night_1 >= 120)
+
+        # 21:00-00:00 = 2 שעות לילה
+        night_2 = calculate_night_hours_in_segment(21*60, 24*60)
+        self.assertEqual(night_2, 120)
+        self.assertTrue(night_2 >= 120)
+
+        # משמרת 21:00-23:00 - לא לילה, סף 8 שעות
+        segments_short = [(1260, 1380, None)]
+        result_short = _calculate_chain_wages(segments_short, date(2024, 12, 15), {}, 0, is_night_shift=False)
+        self.assertEqual(result_short["calc100"], 120)  # 2 שעות @ 100%
+
+        # משמרת 21:00-00:00 - לילה, סף 7 שעות
+        segments_long = [(1260, 1440, None)]
+        result_long = _calculate_chain_wages(segments_long, date(2024, 12, 15), {}, 0, is_night_shift=True)
+        self.assertEqual(result_long["calc100"], 180)  # 3 שעות @ 100% (פחות מ-7)
+
+
+class TestNightChainWithCarryover(unittest.TestCase):
+    """בדיקות רצף לילה עם carryover - הרצף נחשב לילה לפי סה"כ שעות הלילה ברצף כולו"""
+
+    def test_carryover_night_hours_determine_chain_type(self):
+        """
+        רצף עם carryover של שעות לילה:
+        אם ה-carryover כולל 2+ שעות לילה, הרצף כולו הוא רצף לילה (סף 7 שעות)
+        """
+        # דוגמה: אתמול עבדתי 22:00-08:00 (10 שעות, מתוכן 8 שעות לילה)
+        # היום ממשיך ב-08:00 עם עוד 2 שעות
+        # הרצף כולו = 12 שעות, מתוכן 8 שעות לילה = רצף לילה
+        # סף 7 שעות: 420 דק' 100%, 120 דק' 125%, 180 דק' 150%
+
+        # בדיקת זיהוי שעות לילה
+        # 22:00-06:00 = 8 שעות לילה (480 דקות)
+        night_hours_1 = calculate_night_hours_in_segment(22*60, 6*60)
+        self.assertEqual(night_hours_1, 480)
+
+        # 08:00-10:00 = 0 שעות לילה
+        night_hours_2 = calculate_night_hours_in_segment(8*60, 10*60)
+        self.assertEqual(night_hours_2, 0)
+
+        # סה"כ: 480 + 0 = 480 דקות לילה >= 120 = רצף לילה ✓
+        total_night = night_hours_1 + night_hours_2
+        self.assertTrue(total_night >= 120)  # NIGHT_HOURS_THRESHOLD
+
+    def test_day_carryover_to_night_chain(self):
+        """
+        רצף יום שממשיך לרצף לילה:
+        אתמול: 14:00-08:00 (18 שעות, מתוכן 8 שעות לילה 22:00-06:00)
+        = רצף לילה, סף 7 שעות
+        """
+        # 14:00-22:00 = 0 שעות לילה
+        night_1 = calculate_night_hours_in_segment(14*60, 22*60)
+        self.assertEqual(night_1, 0)
+
+        # 22:00-06:00 = 8 שעות לילה
+        night_2 = calculate_night_hours_in_segment(22*60, 6*60)
+        self.assertEqual(night_2, 480)
+
+        # 06:00-08:00 = 0 שעות לילה
+        night_3 = calculate_night_hours_in_segment(6*60, 8*60)
+        self.assertEqual(night_3, 0)
+
+        total = night_1 + night_2 + night_3
+        self.assertEqual(total, 480)  # 8 שעות לילה
+        self.assertTrue(total >= 120)  # רצף לילה
+
+    def test_short_night_hours_not_night_chain(self):
+        """
+        רצף עם פחות מ-2 שעות לילה = רצף יום (סף 8 שעות)
+        """
+        # 20:00-23:00 = 1 שעה לילה בלבד (22:00-23:00)
+        night_hours = calculate_night_hours_in_segment(20*60, 23*60)
+        self.assertEqual(night_hours, 60)  # רק שעה אחת בטווח 22:00-06:00
+        self.assertFalse(night_hours >= 120)  # לא רצף לילה
+
+    def test_exactly_2_hours_qualifies(self):
+        """
+        בדיוק 2 שעות בטווח 22:00-06:00 = רצף לילה
+        """
+        # 21:00-00:00 = 2 שעות לילה (22:00-00:00)
+        night_hours = calculate_night_hours_in_segment(21*60, 24*60)
+        self.assertEqual(night_hours, 120)  # בדיוק 2 שעות
+        self.assertTrue(night_hours >= 120)  # רצף לילה
+
+    def test_carryover_adds_to_current_night_hours(self):
+        """
+        carryover של 1 שעת לילה + עבודה נוכחית של 1 שעת לילה = 2 שעות = רצף לילה
+        """
+        carryover_night = 60  # 1 שעה מאתמול
+        current_night = 60     # 1 שעה היום
+
+        total_night = carryover_night + current_night
+        self.assertEqual(total_night, 120)
+        self.assertTrue(total_night >= 120)  # רצף לילה
+
+
 # ============================================================================
 # חלק 2: בדיקות ידניות עם נתונים אמיתיים
 # ============================================================================

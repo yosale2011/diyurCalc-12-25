@@ -53,8 +53,8 @@ def load_export_config_from_db(conn) -> Dict[str, Tuple[str, str, str]]:
             'vacation': 'hours_100',
             'vacation_minutes': 'hours_100',
 
-            # מחלה - תשלום מחושב עם אחוזים מדורגים
-            'sick_payment': 'money',
+            # מחלה - תשלום מחושב עם אחוזים מדורגים, מציג שעות משולמות
+            'sick_payment': 'sick_hours_paid',
             'sick_minutes': 'hours_100',
 
             # סכומים ישירים
@@ -208,15 +208,22 @@ def calculate_value(totals: Dict, internal_key: str, value_type: str, minimum_wa
         return (days, round(total_hours, 2))
     
     elif value_type == 'standby_with_rate':
-        # כוננויות - כמות ותעריף ממוצע
-        standby_count = totals.get('standby', 0) or 0
+        # כוננויות - תמיד כמות 1, תעריף = סכום כולל
         standby_payment = totals.get('standby_payment', 0) or 0
-        if standby_count > 0:
-            avg_rate = round(standby_payment / standby_count, 2)
+        if standby_payment > 0:
+            return (1.0, round(standby_payment, 2))
         else:
-            avg_rate = 0.0
-        return (round(standby_count, 2), avg_rate)
-    
+            return (0.0, 0.0)
+
+    elif value_type == 'sick_hours_paid':
+        # תשלום מחלה - שעות משולמות (תשלום / תעריף) עם תעריף 100%
+        sick_payment = totals.get('sick_payment', 0) or 0
+        if sick_payment > 0 and minimum_wage > 0:
+            paid_hours = round(sick_payment / minimum_wage, 2)
+            return (paid_hours, round(minimum_wage, 2))
+        else:
+            return (0.0, 0.0)
+
     else:
         # ברירת מחדל - כמות בלבד
         return (round(raw_value, 2), 0.0)

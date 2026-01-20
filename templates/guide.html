@@ -1255,15 +1255,9 @@
                     <td>{{ code.merav_code or '' }}</td>
 
                     {% if key == 'standby' %}
-                    {# val (standby) כבר מייצג רק כוננויות ששולמו - לא צריך להחסיר cancelled #}
-                    <td>{{ val }}</td>
-                    <td>
-                      {% if val > 0 %}
-                      {{ "%.2f"|format((monthly_totals.standby_payment or 0) / val) }} ₪
-                      {% else %}
-                      0.00 ₪
-                      {% endif %}
-                    </td>
+                    {# כוננויות - תמיד כמות 1, תעריף = סכום כולל #}
+                    <td>1</td>
+                    <td>{{ "%.2f"|format(monthly_totals.standby_payment or 0) }} ₪</td>
                     <td>{{ (monthly_totals.standby_payment or 0) | format_currency }}</td>
                     {% elif key == 'vacation' %}
                     <td>{{ (val | float / 60) | round(2) }}</td>
@@ -1280,9 +1274,9 @@
                     <td>-</td>
                     <td>{{ val | format_currency }}</td>
                     {% elif key == 'sick_payment' %}
-                    {# תשלום מחלה - שעות מחלה עם תשלום מדורג לפי החוק #}
-                    {% set sick_hours = (monthly_totals.sick_minutes or 0) / 60 %}
-                    <td>{{ sick_hours | round(2) }}</td>
+                    {# תשלום מחלה - רק שעות ששולמו (תשלום / תעריף) #}
+                    {% set sick_paid_hours = (val / hourly_rate) if hourly_rate > 0 else 0 %}
+                    <td>{{ sick_paid_hours | round(2) }}</td>
                     <td>{{ "%.2f"|format(hourly_rate) }} ₪</td>
                     <td>{{ val | format_currency }}</td>
                     {% elif key == 'calc_variable' %}
