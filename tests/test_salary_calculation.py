@@ -1243,26 +1243,27 @@ class TestMonthBoundaryCarryover(unittest.TestCase):
 
     def test_shabbat_spanning_month_boundary(self):
         """
-        שבת שחוצה גבול חודש (נדיר אבל אפשרי)
-        אם 31/12 = שבת ו-01/01 = מוצ"ש
+        משמרת 10:00-20:00 ביום שבת (28/12/2024)
 
-        בדיקת התעריפים: חלק בשבת, חלק בחול
+        שבת נכנסת ב-16:30 (יום שישי) ויוצאת ב-17:45 (יום שבת)
+        כלומר 10:00-17:45 ביום שבת = עדיין שבת (7.75 שעות = 465 דקות)
+        17:45-20:00 ביום שבת = אחרי צאת שבת = חול (2.25 שעות = 135 דקות)
         """
-        # נניח ש-31/12/2024 = שבת (בפועל זה יום שלישי, אבל לצורך הבדיקה)
-        # 31/12: 22:00-08:00 בשבת
+        # 28/12/2024 = שבת (weekday=5)
         shabbat_cache = {
-            "2024-12-31": {"enter": "16:30", "exit": "17:45"},  # יציאת שבת ב-17:45 ב-01/01
+            "2024-12-28": {"enter": "16:30", "exit": "17:45"},  # יציאת שבת ב-17:45 ביום שבת
         }
 
-        segments = [(1320, 1920, None)]  # 22:00-08:00
-        result = _calculate_chain_wages(segments, date(2024, 12, 28), shabbat_cache, 0, is_night_shift=True)
+        segments = [(600, 1200, None)]  # 10:00-20:00
+        result = _calculate_chain_wages(segments, date(2024, 12, 28), shabbat_cache, 0, is_night_shift=False)
 
-        # 28/12/2024 = שבת (weekday=5)
-        # כל המשמרת בשבת עם סף 7 שעות
-        # 7 שעות @ 150%, 2 שעות @ 175%, 1 שעה @ 200%
-        self.assertEqual(result["calc150"], 420)
-        self.assertEqual(result["calc175"], 120)
-        self.assertEqual(result["calc200"], 60)
+        # 10:00-17:45 (7.75 שעות = 465 דקות) = שבת @ 150%
+        # 17:45-18:00 (0.25 שעות = 15 דקות) = חול @ 100% (להשלמת 8 שעות)
+        # 18:00-20:00 (2 שעות = 120 דקות) = חול @ 125% (שעות נוספות)
+        # סה"כ 10 שעות = 600 דקות
+        self.assertEqual(result["calc150"], 465)  # 7.75 שעות שבת
+        self.assertEqual(result["calc100"], 15)   # 0.25 שעות חול (להשלמת 8)
+        self.assertEqual(result["calc125"], 120)  # 2 שעות חול שעות נוספות
 
     def test_night_hours_carryover_between_months(self):
         """
@@ -1341,24 +1342,28 @@ class TestComplexScenarios(unittest.TestCase):
     def test_shabbat_to_weekday_transition(self):
         """
         מעבר משבת ליום חול באותו רצף:
-        שבת: 20:00-08:00 (12 שעות בשבת)
-        מוצ"ש: 08:00-12:00 (4 שעות בחול)
+        משמרת 10:00-22:00 ביום שבת (28/12/2024)
 
-        הערה: שבת יוצאת בערך ב-17:45 ביום ראשון, אז 08:00-12:00 ביום ראשון = חול
+        שבת נכנסת ב-16:30 (יום שישי) ויוצאת ב-17:45 (יום שבת)
+        כלומר 10:00-17:45 ביום שבת = עדיין שבת (7.75 שעות = 465 דקות)
+        17:45-22:00 ביום שבת = אחרי צאת שבת = חול (4.25 שעות = 255 דקות)
         """
         shabbat_cache = {
             "2024-12-28": {"enter": "16:30", "exit": "17:45"},
         }
 
-        # שבת: 20:00-08:00
-        segments_shabbat = [(1200, 1920, None)]
-        result_shabbat = _calculate_chain_wages(segments_shabbat, date(2024, 12, 28), shabbat_cache, 0, is_night_shift=True)
+        # משמרת: 10:00-22:00 (12 שעות)
+        segments_shabbat = [(600, 1320, None)]
+        result_shabbat = _calculate_chain_wages(segments_shabbat, date(2024, 12, 28), shabbat_cache, 0, is_night_shift=False)
 
-        # כל המשמרת בשבת (צאת שבת ב-17:45 למחרת)
-        # סף 7 שעות: 7 @ 150%, 2 @ 175%, 3 @ 200%
-        self.assertEqual(result_shabbat["calc150"], 420)
-        self.assertEqual(result_shabbat["calc175"], 120)
-        self.assertEqual(result_shabbat["calc200"], 180)
+        # 10:00-17:45 (7.75 שעות = 465 דקות) = שבת @ 150%
+        # 17:45-18:00 (0.25 שעות = 15 דקות) = חול @ 100% (להשלמת 8 שעות)
+        # 18:00-20:00 (2 שעות = 120 דקות) = חול @ 125% (שעות 8-10)
+        # 20:00-22:00 (2 שעות = 120 דקות) = חול @ 150% (שעות 10+)
+        # סה"כ 12 שעות = 720 דקות
+        self.assertEqual(result_shabbat["calc150"], 585)  # 7.75 שעות שבת (465) + 2 שעות חול 150% (120)
+        self.assertEqual(result_shabbat["calc100"], 15)   # 0.25 שעות חול (להשלמת 8)
+        self.assertEqual(result_shabbat["calc125"], 120)  # 2 שעות חול שעות נוספות (8-10)
 
     def test_partial_night_shift_boundary(self):
         """
