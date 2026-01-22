@@ -25,7 +25,7 @@ from decimal import Decimal
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from app_utils import calculate_wage_rate, _calculate_chain_wages
+from app_utils import calculate_wage_rate, _calculate_chain_wages as _calculate_chain_wages_new
 from core.time_utils import (
     REGULAR_HOURS_LIMIT,
     OVERTIME_125_LIMIT,
@@ -36,6 +36,38 @@ from core.constants import (
     calculate_night_hours_in_segment,
     qualifies_as_night_shift,
 )
+
+
+def _calculate_chain_wages(segments, day_date, shabbat_cache, minutes_offset, is_night_shift=False):
+    """
+    פונקציית עטיפה לתאימות לאחור עם הבדיקות הקיימות.
+    ממירה מהחתימה הישנה (segments, day_date, cache, offset) לחדשה (segments_with_date, cache, offset).
+
+    הפונקציה מפצלת סגמנטים שחוצים חצות כדי שלכל חלק יהיה התאריך הנכון:
+    - חלק לפני חצות (< 1440) נשאר עם day_date
+    - חלק אחרי חצות (>= 1440) מקבל day_date + 1
+    """
+    from datetime import timedelta
+
+    MINUTES_PER_DAY = 1440
+    segments_with_date = []
+
+    for s, e, sid in segments:
+        if s < MINUTES_PER_DAY and e > MINUTES_PER_DAY:
+            # סגמנט חוצה חצות - פיצול לשני חלקים
+            # חלק 1: עד חצות (ביום הנוכחי)
+            segments_with_date.append((s, MINUTES_PER_DAY, sid, day_date))
+            # חלק 2: מחצות ואילך (ביום הבא)
+            # הזמנים נשארים מעל 1440 כדי לשמור על הרציפות
+            segments_with_date.append((MINUTES_PER_DAY, e, sid, day_date + timedelta(days=1)))
+        elif s >= MINUTES_PER_DAY:
+            # סגמנט כולו אחרי חצות - שייך ליום הבא
+            segments_with_date.append((s, e, sid, day_date + timedelta(days=1)))
+        else:
+            # סגמנט כולו לפני חצות - שייך ליום הנוכחי
+            segments_with_date.append((s, e, sid, day_date))
+
+    return _calculate_chain_wages_new(segments_with_date, shabbat_cache, minutes_offset, is_night_shift)
 
 # ============================================================================
 # חלק 1: בדיקות אוטומטיות (Unit Tests)
@@ -271,6 +303,76 @@ class TestStandby(unittest.TestCase):
         # בדיקה אם יש חפיפה
         overlaps = (work_start < standby_end and work_end > standby_start)
         self.assertTrue(overlaps)
+
+    def test_early_exit_partial_standby_becomes_work(self):
+        """כוננות חלקית בגלל יציאה מוקדמת - משלמים כשעות עבודה"""
+        # דוגמה: משמרת לילה 22:00-03:00 (יציאה מוקדמת)
+        # כוננות מוגדרת: 00:00-06:30
+        # העובד יצא ב-03:00, אז הכוננות היא רק 00:00-03:00
+
+        hourly_rate = 34.40  # שכר מינימום לשעה
+
+        # עבודה: 22:00-00:00 = 2 שעות
+        work_hours = 2
+
+        # כוננות חלקית בגלל יציאה מוקדמת: 00:00-03:00 = 3 שעות
+        # לפי הכלל החדש: משלמים כשעות עבודה שממשיכות את הרצף
+        partial_standby_hours = 3
+
+        # סה"כ שעות עבודה (כולל הכוננות החלקית): 5 שעות
+        total_work_hours = work_hours + partial_standby_hours
+        self.assertEqual(total_work_hours, 5)
+
+        # כל 5 השעות הן @ 100% (פחות מ-8)
+        expected_payment = total_work_hours * hourly_rate * 1.0
+        self.assertAlmostEqual(expected_payment, 172.00, places=2)
+
+    def test_early_exit_partial_standby_continues_chain_overtime(self):
+        """כוננות חלקית בגלל יציאה מוקדמת - ממשיכה את הרצף לשעות נוספות"""
+        # דוגמה: משמרת 13:00-03:00 (יציאה מוקדמת)
+        # כוננות מוגדרת: 22:00-08:00
+        # עבודה: 13:00-22:00 = 9 שעות
+        # כוננות חלקית: 22:00-03:00 = 5 שעות (יציאה מוקדמת)
+
+        hourly_rate = 34.40
+
+        # עבודה: 9 שעות
+        #   8 שעות @ 100%
+        #   1 שעה @ 125%
+        work_payment = (8 * hourly_rate * 1.0) + (1 * hourly_rate * 1.25)
+
+        # כוננות חלקית: 5 שעות - ממשיכה את הרצף
+        #   1 שעה @ 125% (שעות 9-10)
+        #   4 שעות @ 150% (שעה 11+)
+        partial_standby_payment = (1 * hourly_rate * 1.25) + (4 * hourly_rate * 1.5)
+
+        # סה"כ: 14 שעות
+        total_hours = 9 + 5
+        self.assertEqual(total_hours, 14)
+
+        total_payment = work_payment + partial_standby_payment
+        # 8*34.40*1.0 + 2*34.40*1.25 + 4*34.40*1.5
+        # = 275.20 + 86.00 + 206.40 = 567.60
+        self.assertAlmostEqual(total_payment, 567.60, places=2)
+
+    def test_full_standby_not_affected(self):
+        """כוננות מלאה (לא יציאה מוקדמת) - משלמים תעריף כוננות קבוע"""
+        # דוגמה: משמרת לילה 22:00-08:00 (שמרה עד הסוף)
+        # כוננות מוגדרת: 00:00-06:30
+        # העובד היה עד הסוף, אז זו כוננות מלאה
+
+        hourly_rate = 34.40
+        standby_rate = 150  # ש"ח - תעריף כוננות קבוע
+
+        # עבודה: 22:00-00:00 = 2 שעות + 06:30-08:00 = 1.5 שעות = 3.5 שעות
+        work_hours = 3.5
+        work_payment = work_hours * hourly_rate * 1.0
+
+        # כוננות מלאה: 00:00-06:30 = 6.5 שעות - תעריף קבוע
+        total_payment = work_payment + standby_rate
+
+        # 3.5 * 34.40 + 150 = 120.40 + 150 = 270.40
+        self.assertAlmostEqual(total_payment, 270.40, places=2)
 
 
 class TestFullSalaryCalculation(unittest.TestCase):
@@ -1468,6 +1570,304 @@ class TestNightChainWithCarryover(unittest.TestCase):
         total_night = carryover_night + current_night
         self.assertEqual(total_night, 120)
         self.assertTrue(total_night >= 120)  # רצף לילה
+
+
+class TestMixedDaysInSameWorkday(unittest.TestCase):
+    """בדיקות סגמנטים מימים שונים באותו יום עבודה"""
+
+    def test_saturday_segment_in_friday_display_day(self):
+        """
+        באג שתוקן: משמרת ביום שבת (00:00-01:00) שמוצגת תחת יום שישי
+        צריכה להיחשב כשבת (150%) ולא כחול (100%)
+
+        סצנריו: דיווח ביום שישי 30/01/2026
+        - 15:00-17:00 = חול (לפני כניסת שבת ~16:50)
+        - 17:00-22:00 = שבת
+        - בנוסף, משמרת נפרדת 00:00-01:00 ביום שבת 31/01/2026
+
+        ה-00:00-01:00 מוצג תחת יום שישי (אותו יום עבודה) אבל הזמן עצמו
+        הוא ביום שבת ולכן צריך להיחשב כשבת.
+        """
+        # שבת - כניסה בסביבות 16:50 ביום שישי, יציאה בסביבות 17:50 ביום שבת
+        shabbat_cache = {
+            "2026-01-30": {"start": "16:50", "end": "17:50"},  # שבת פרשת בשלח
+            "2026-01-31": {"start": "16:50", "end": "17:50"},
+        }
+
+        # משמרת ביום שבת 00:00-01:00 (60 דקות)
+        # זמן 0-60 ביום שבת צריך להיחשב כשבת (150%)
+        saturday_date = date(2026, 1, 31)  # שבת
+        segments_saturday = [(0, 60, None, saturday_date)]
+
+        result = _calculate_chain_wages_new(segments_saturday, shabbat_cache, 0, False)
+
+        # צריך להיות 150% (שבת) ולא 100% (חול)
+        self.assertEqual(result["calc150"], 60, "משמרת 00:00-01:00 בשבת צריכה להיות 150%")
+        self.assertEqual(result["calc100"], 0, "לא צריך להיות שעות ב-100%")
+        self.assertEqual(result["calc150_shabbat"], 60, "צריך להיות מסומן כשבת")
+
+    def test_friday_before_shabbat_vs_saturday_during_shabbat(self):
+        """
+        השוואה בין סגמנט ביום שישי לפני שבת לסגמנט ביום שבת
+        """
+        shabbat_cache = {
+            "2026-01-30": {"start": "16:50", "end": "17:50"},
+            "2026-01-31": {"start": "16:50", "end": "17:50"},
+        }
+
+        # סגמנט ביום שישי 15:00-16:00 (לפני כניסת שבת) = חול
+        friday_date = date(2026, 1, 30)
+        segments_friday = [(15*60, 16*60, None, friday_date)]
+        result_friday = _calculate_chain_wages_new(segments_friday, shabbat_cache, 0, False)
+        self.assertEqual(result_friday["calc100"], 60, "15:00-16:00 ביום שישי = חול")
+
+        # סגמנט ביום שישי 17:00-18:00 (אחרי כניסת שבת) = שבת
+        segments_friday_shabbat = [(17*60, 18*60, None, friday_date)]
+        result_friday_shabbat = _calculate_chain_wages_new(segments_friday_shabbat, shabbat_cache, 0, False)
+        self.assertEqual(result_friday_shabbat["calc150"], 60, "17:00-18:00 ביום שישי = שבת")
+
+        # סגמנט ביום שבת 00:00-01:00 = שבת
+        saturday_date = date(2026, 1, 31)
+        segments_saturday = [(0, 60, None, saturday_date)]
+        result_saturday = _calculate_chain_wages_new(segments_saturday, shabbat_cache, 0, False)
+        self.assertEqual(result_saturday["calc150"], 60, "00:00-01:00 ביום שבת = שבת")
+
+    def test_multiple_segments_different_dates_same_chain(self):
+        """
+        רצף עבודה עם סגמנטים מימים שונים - כל סגמנט מחושב לפי התאריך שלו
+        """
+        shabbat_cache = {
+            "2026-01-30": {"start": "16:50", "end": "17:50"},
+            "2026-01-31": {"start": "16:50", "end": "17:50"},
+        }
+
+        friday = date(2026, 1, 30)
+        saturday = date(2026, 1, 31)
+
+        # רצף: 15:00-16:00 (שישי, חול) + 00:00-01:00 (שבת, שבת)
+        segments_mixed = [
+            (15*60, 16*60, None, friday),    # 60 דקות חול
+            (0, 60, None, saturday),          # 60 דקות שבת
+        ]
+
+        result = _calculate_chain_wages_new(segments_mixed, shabbat_cache, 0, False)
+
+        # 60 דקות חול + 60 דקות שבת
+        self.assertEqual(result["calc100"], 60, "60 דקות ביום שישי לפני שבת = חול")
+        self.assertEqual(result["calc150"], 60, "60 דקות ביום שבת = שבת")
+
+
+class TestFixedSegmentsWithWorkLabel(unittest.TestCase):
+    """בדיקות לתיקון: סגמנטים עם label='work' ביום is_fixed_segments"""
+
+    def test_work_label_on_saturday_in_fixed_segments_day(self):
+        """
+        באג: כשיש תגבור + שעת עבודה באותו יום
+        - תגבור קובעת is_fixed_segments=True
+        - שעת עבודה מקבלת label='work'
+        - בעיבוד is_fixed_segments, label='work' נופל ל-else ומחושב כ-100%
+        - אבל אם שעת העבודה היא בשבת, צריך להיות 150%
+
+        תיקון: בעיבוד is_fixed_segments, אם label='work', לחשב לפי actual_date
+        """
+        from core.time_utils import _get_shabbat_boundaries, FRIDAY, SATURDAY, MINUTES_PER_DAY
+
+        # סימולציה של סגמנט עם label='work' ביום שבת
+        saturday = date(2026, 1, 31)  # שבת
+        seg_weekday = saturday.weekday()
+
+        self.assertEqual(seg_weekday, SATURDAY, "31/01/2026 צריך להיות שבת")
+
+        # קבלת גבולות שבת
+        shabbat_cache = {}
+        seg_shabbat_enter, seg_shabbat_exit = _get_shabbat_boundaries(saturday, shabbat_cache)
+
+        # סגמנט 00:00-01:00 ביום שבת
+        s, e = 0, 60
+        actual_start = s % MINUTES_PER_DAY
+        actual_end = e % MINUTES_PER_DAY
+
+        day_offset = MINUTES_PER_DAY if seg_weekday == SATURDAY else 0
+        abs_start = actual_start + day_offset
+        abs_end = actual_end + day_offset
+
+        # בדיקה שהזמן בתוך שבת
+        is_in_shabbat = seg_shabbat_enter > 0 and abs_start >= seg_shabbat_enter and abs_end <= seg_shabbat_exit
+
+        self.assertTrue(is_in_shabbat, f"00:00-01:00 בשבת צריך להיות בתוך שבת. enter={seg_shabbat_enter}, exit={seg_shabbat_exit}, abs_start={abs_start}, abs_end={abs_end}")
+
+
+class TestHolidayWages(unittest.TestCase):
+    """
+    בדיקות חישוב שכר בחגים.
+    חגים מתנהגים כמו שבת (תוספת 50%) וערבי חג כמו יום שישי.
+    """
+
+    def test_holiday_adds_50_percent(self):
+        """
+        יום חג (לא שבת) מקבל תוספת 50% כמו שבת.
+        סוכות א' - יום רביעי 2025-10-07
+        """
+        # ערב סוכות (יום שלישי) עם enter, סוכות א' (יום רביעי) עם exit
+        holiday_cache = {
+            "2025-10-06": {"enter": "17:45"},  # ערב סוכות - יום שלישי
+            "2025-10-07": {"exit": "18:40"},   # סוכות א' - יום רביעי
+        }
+
+        # משמרת 10:00-18:00 ביום חג (8 שעות)
+        holiday_date = date(2025, 10, 7)  # יום רביעי
+        segments = [(600, 1080, None, holiday_date)]
+
+        result = _calculate_chain_wages_new(segments, holiday_cache, 0, False)
+
+        # 8 שעות @ 150% (חג)
+        self.assertEqual(result["calc150"], 480, "8 שעות ביום חג צריכות להיות 150%")
+        self.assertEqual(result["calc100"], 0, "לא צריך להיות שעות ב-100%")
+        self.assertEqual(result["calc150_shabbat"], 480, "צריך להיות מסומן כשבת/חג")
+
+    def test_holiday_eve_like_friday(self):
+        """
+        ערב חג מתנהג כמו יום שישי - עבודה לפני כניסת החג היא חול,
+        עבודה אחרי כניסת החג היא חג.
+
+        מבנה הטבלה: הנתונים (enter + exit) נמצאים ברשומה של יום החג עצמו,
+        לא ברשומה של יום הערב.
+        """
+        # מבנה כמו בטבלה האמיתית - כל הנתונים ברשומה של יום החג
+        holiday_cache = {
+            "2025-10-07": {"enter": "17:45", "exit": "18:40"},  # סוכות א' - enter היא הדלקת נרות בערב
+        }
+
+        # משמרת 16:00-20:00 בערב חג
+        eve_date = date(2025, 10, 6)  # יום שני - ערב סוכות
+        segments = [(960, 1200, None, eve_date)]  # 16:00-20:00
+
+        result = _calculate_chain_wages_new(segments, holiday_cache, 0, False)
+
+        # 16:00-17:45 (105 דקות) = חול @ 100%
+        # 17:45-20:00 (135 דקות) = חג @ 150%
+        self.assertEqual(result["calc100"], 105, "לפני כניסת החג = חול")
+        self.assertEqual(result["calc150"], 135, "אחרי כניסת החג = 150%")
+
+    def test_holiday_overtime_rates(self):
+        """
+        שעות נוספות בחג - אותם תעריפים כמו שבת:
+        - 0-8 שעות: 150% (100% + 50%)
+        - 8-10 שעות: 175% (125% + 50%)
+        - 10+ שעות: 200% (150% + 50%)
+
+        מבנה הטבלה: כל הנתונים (enter + exit) נמצאים ברשומה של יום החג עצמו.
+        """
+        # מבנה נכון - כל הנתונים ברשומה אחת
+        holiday_cache = {
+            "2025-10-07": {"enter": "17:45", "exit": "18:40"},
+        }
+
+        # משמרת 08:00-18:40 ביום חג (10:40 שעות = 640 דקות, כולו בחג)
+        holiday_date = date(2025, 10, 7)
+        segments = [(480, 1120, None, holiday_date)]  # עד צאת החג
+
+        result = _calculate_chain_wages_new(segments, holiday_cache, 0, False)
+
+        # 8 שעות @ 150%, 2 שעות @ 175%, 40 דקות @ 200%
+        self.assertEqual(result["calc150"], 480, "8 שעות @ 150%")
+        self.assertEqual(result["calc175"], 120, "2 שעות @ 175%")
+        self.assertEqual(result["calc200"], 40, "40 דקות @ 200%")
+
+    def test_two_day_holiday(self):
+        """
+        חג של יומיים (כמו ראש השנה).
+
+        מבנה הטבלה: לחג דו-יומי יש רשומה אחת ליום האחרון עם enter (מהערב הראשון) ו-exit.
+        חייב להיות שדה 'holiday' כדי לזהות אותו כחג דו-יומי.
+        """
+        # מבנה נכון - רשומה אחת ליום האחרון עם שדה holiday
+        holiday_cache = {
+            "2025-09-24": {"enter": "18:15", "exit": "19:10", "holiday": "ראש השנה"},
+        }
+
+        # משמרת ביום ב' של ראש השנה (2025-09-24)
+        day2_date = date(2025, 9, 24)
+        segments = [(600, 1080, None, day2_date)]  # 10:00-18:00 (8 שעות)
+
+        result = _calculate_chain_wages_new(segments, holiday_cache, 0, False)
+
+        # כל המשמרת בחג
+        self.assertEqual(result["calc150"], 480, "8 שעות ביום ב' של ר\"ה = 150%")
+        self.assertEqual(result["calc100"], 0)
+
+    def test_holiday_vs_shabbat_same_logic(self):
+        """
+        השוואה: חג ושבת צריכים לקבל אותו חישוב כשהמשמרת כולה בתוך הזמן המקודש.
+        """
+        # שבת רגילה - משמרת 10:00-16:00 (כולה לפני צאת שבת ב-17:45)
+        shabbat_cache = {
+            "2026-01-09": {"enter": "16:30"},  # יום שישי
+            "2026-01-10": {"exit": "17:45"},   # שבת
+        }
+
+        saturday = date(2026, 1, 10)
+        segments_shabbat = [(600, 960, None, saturday)]  # 10:00-16:00 (6 שעות בשבת)
+
+        result_shabbat = _calculate_chain_wages_new(segments_shabbat, shabbat_cache, 0, False)
+
+        # חג (סוכות) - משמרת 10:00-16:00 (כולה לפני צאת החג ב-18:40)
+        holiday_cache = {
+            "2025-10-06": {"enter": "17:45"},
+            "2025-10-07": {"exit": "18:40"},
+        }
+
+        holiday = date(2025, 10, 7)
+        segments_holiday = [(600, 960, None, holiday)]  # 10:00-16:00 (6 שעות בחג)
+
+        result_holiday = _calculate_chain_wages_new(segments_holiday, holiday_cache, 0, False)
+
+        # שניהם צריכים להיות 6 שעות @ 150%
+        self.assertEqual(result_shabbat["calc150"], result_holiday["calc150"],
+                        "שבת וחג צריכים לקבל אותו חישוב")
+        self.assertEqual(result_shabbat["calc150"], 360)  # 6 שעות
+
+    def test_weekday_no_holiday(self):
+        """
+        יום חול רגיל (ללא חג) - לא מקבל תוספת.
+        """
+        # cache ריק - אין שבת או חג
+        empty_cache = {}
+
+        # יום רביעי רגיל
+        wednesday = date(2025, 10, 8)  # יום אחרי סוכות
+        segments = [(600, 1080, None, wednesday)]  # 10:00-18:00
+
+        result = _calculate_chain_wages_new(segments, empty_cache, 0, False)
+
+        # 8 שעות @ 100% (חול)
+        self.assertEqual(result["calc100"], 480)
+        self.assertEqual(result["calc150"], 0)
+
+    def test_night_shift_on_holiday(self):
+        """
+        משמרת לילה בחג - סף 7 שעות כמו בשבת.
+
+        מבנה הטבלה: כל הנתונים (enter + exit) נמצאים ברשומה של יום החג עצמו.
+        """
+        # מבנה נכון - כל הנתונים ברשומה אחת
+        holiday_cache = {
+            "2025-10-07": {"enter": "17:45", "exit": "18:40"},
+        }
+
+        # משמרת 22:00-06:30 בערב חג (8.5 שעות)
+        eve_date = date(2025, 10, 6)
+        segments = [
+            (1320, 1440, None, eve_date),  # 22:00-00:00 בערב חג
+            (1440, 1830, None, date(2025, 10, 7)),  # 00:00-06:30 ביום חג
+        ]
+
+        result = _calculate_chain_wages_new(segments, holiday_cache, 0, is_night_shift=True)
+
+        # כל המשמרת אחרי כניסת החג (17:45) = חג
+        # עם סף לילה (7 שעות): 7 שעות @ 150%, 1.5 שעות @ 175%
+        self.assertEqual(result["calc150"], 420, "7 שעות @ 150%")
+        self.assertEqual(result["calc175"], 90, "1.5 שעות @ 175%")
 
 
 # ============================================================================

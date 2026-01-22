@@ -46,7 +46,8 @@
       "Bash(/c/Users/leahsc/AppData/Local/Python/pythoncore-3.14-64/python.exe -c:*)",
       "Bash(py -m pytest tests/test_salary_calculation.py -v)",
       "Bash(py:*)",
-      "Bash(timeout 5 uvicorn:*)"
+      "Bash(timeout 5 uvicorn:*)",
+      "Bash(f:)"
     ],
     "deny": [],
     "ask": []

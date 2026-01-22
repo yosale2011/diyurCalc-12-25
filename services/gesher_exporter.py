@@ -57,6 +57,9 @@ def load_export_config_from_db(conn) -> Dict[str, Tuple[str, str, str]]:
             'sick_payment': 'sick_hours_paid',
             'sick_minutes': 'hours_100',
 
+            # תעריפים משתנים (ליווי רפואי וכדומה) - תשלום מחושב כולל בונוס
+            'calc_variable': 'variable_rate_payment',
+
             # סכומים ישירים
             'travel': 'money',
             'extras': 'money',
@@ -221,6 +224,15 @@ def calculate_value(totals: Dict, internal_key: str, value_type: str, minimum_wa
         if sick_payment > 0 and minimum_wage > 0:
             paid_hours = round(sick_payment / minimum_wage, 2)
             return (paid_hours, round(minimum_wage, 2))
+        else:
+            return (0.0, 0.0)
+
+    elif value_type == 'variable_rate_payment':
+        # תעריפים משתנים - כמות=1, תעריף=סה"כ התשלום
+        # כך נמנעים מפערי עיגול (כמות × תעריף = סכום מדויק)
+        payment = totals.get('payment_calc_variable', 0) or 0
+        if payment > 0:
+            return (1.0, round(payment, 2))
         else:
             return (0.0, 0.0)
 
