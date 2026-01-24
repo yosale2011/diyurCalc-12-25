@@ -80,11 +80,7 @@ def load_export_config_from_db(conn) -> Dict[str, Tuple[str, str, str]]:
             # אם אין סמל, מדלגים
             if not symbol or not symbol.strip():
                 continue
-            
-            # סינון קודים אסורים לייצוא
-            if symbol in EXCLUDED_EXPORT_CODES:
-                continue
-                
+
             # קביעת הסוג
             # 1. בדיקה במיפוי הקשיח
             value_type = type_mapping.get(internal_key)
@@ -351,12 +347,16 @@ def generate_gesher_file_for_person(conn, person_id: int, year: int, month: int)
     
     # יצירת שורות
     for symbol, value_tuple in export_codes.items():
+        # סינון קודים אסורים לייצוא (מוצגים בתצוגה מקדימה אבל לא בקובץ)
+        if symbol in EXCLUDED_EXPORT_CODES:
+            continue
+
         # תמיכה גם בפורמט ישן (2 איברים) וגם חדש (3 איברים)
         if len(value_tuple) == 3:
             internal_key, value_type, display_name = value_tuple
         else:
             internal_key, value_type = value_tuple
-        
+
         quantity, rate = calculate_value(totals, internal_key, value_type, minimum_wage)
         
         if not options['export_zero_values']:
@@ -467,6 +467,10 @@ def generate_gesher_file(conn, year: int, month: int, filter_name: str = None, c
 
         # יצירת שורה לכל סמל
         for symbol, value_tuple in export_codes.items():
+            # סינון קודים אסורים לייצוא (מוצגים בתצוגה מקדימה אבל לא בקובץ)
+            if symbol in EXCLUDED_EXPORT_CODES:
+                continue
+
             # תמיכה גם בפורמט ישן (2 איברים) וגם חדש (3 איברים)
             if len(value_tuple) == 3:
                 internal_key, value_type, display_name = value_tuple
@@ -590,6 +594,10 @@ def generate_gesher_file_for_multiple(conn, person_ids: List[int], year: int, mo
 
         # יצירת שורה לכל סמל
         for symbol, value_tuple in export_codes.items():
+            # סינון קודים אסורים לייצוא (מוצגים בתצוגה מקדימה אבל לא בקובץ)
+            if symbol in EXCLUDED_EXPORT_CODES:
+                continue
+
             # תמיכה גם בפורמט ישן (2 איברים) וגם חדש (3 איברים)
             if len(value_tuple) == 3:
                 internal_key, value_type, display_name = value_tuple

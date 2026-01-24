@@ -83,10 +83,11 @@
                     <th onclick="sortTable(8)" style="cursor: pointer; padding: 2px 4px; width: 40px; text-align: right;" title="ימי עבודה">ימים<div style="font-size: 9px; color: #888;">767</div></th>
                     <th onclick="sortTable(9)" style="cursor: pointer; padding: 2px 4px; width: 45px; text-align: right;" title="סה״כ שעות">סהכ<div style="font-size: 9px; color: #888;">199</div></th>
                     <th onclick="sortTable(10)" style="cursor: pointer; padding: 2px 4px; width: 50px; text-align: right;" title="חופשה">חופשה<div style="font-size: 9px; color: #888;">376</div></th>
-                    <th onclick="sortTable(11)" style="cursor: pointer; padding: 2px 4px; background: #dbeafe; width: 55px; text-align: right;" title="כוננויות">כוננויות<div style="font-size: 9px; color: #888;">{{ ns.standby }}</div></th>
-                    <th onclick="sortTable(12)" style="cursor: pointer; padding: 2px 4px; background: #fef3c7; width: 55px; text-align: right;" title="נסיעות">נסיעות<div style="font-size: 9px; color: #888;">{{ ns.travel }}</div></th>
-                    <th onclick="sortTable(13)" style="cursor: pointer; padding: 2px 4px; background: #f3e8ff; width: 55px; text-align: right;" title="תוספות">תוספות<div style="font-size: 9px; color: #888;">{{ ns.extras }}</div></th>
-                    <th onclick="sortTable(14)" style="cursor: pointer; padding: 2px 4px; background: #e7f5ff; font-weight: bold; width: 70px; text-align: right;">סה"כ</th>
+                    <th onclick="sortTable(11)" style="cursor: pointer; padding: 2px 4px; background: #ffebee; width: 50px; text-align: right;" title="מחלה">מחלה<div style="font-size: 9px; color: #888;">377</div></th>
+                    <th onclick="sortTable(12)" style="cursor: pointer; padding: 2px 4px; background: #dbeafe; width: 55px; text-align: right;" title="כוננויות">כוננויות<div style="font-size: 9px; color: #888;">{{ ns.standby }}</div></th>
+                    <th onclick="sortTable(13)" style="cursor: pointer; padding: 2px 4px; background: #fef3c7; width: 55px; text-align: right;" title="נסיעות">נסיעות<div style="font-size: 9px; color: #888;">{{ ns.travel }}</div></th>
+                    <th onclick="sortTable(14)" style="cursor: pointer; padding: 2px 4px; background: #f3e8ff; width: 55px; text-align: right;" title="תוספות">תוספות<div style="font-size: 9px; color: #888;">{{ ns.extras }}</div></th>
+                    <th onclick="sortTable(15)" style="cursor: pointer; padding: 2px 4px; background: #e7f5ff; font-weight: bold; width: 70px; text-align: right;">סה"כ</th>
                 </tr>
             </thead>
             <tbody>
@@ -105,10 +106,11 @@
                     <td style="text-align: right; padding: 2px;">{% set v = row.totals.actual_work_days or 0 %}{% if v > 0 %}{{ v }}{% else %}<span style="color:#ddd;">-</span>{% endif %}</td>
                     <td style="text-align: right; padding: 2px;">{% set v = row.totals.total_hours or 0 %}{% if v > 0 %}{{ (v|float/60)|round(1) }}{% else %}<span style="color:#ddd;">-</span>{% endif %}</td>
                     <td style="text-align: right; padding: 2px;">{% set v = row.totals.vacation_minutes or 0 %}{% if v > 0 %}{{ (v|float/60)|round(1) }}{% else %}<span style="color:#ddd;">-</span>{% endif %}</td>
+                    <td style="text-align: right; padding: 2px; background: #fff5f5;">{% if row.totals.sick_payment and row.totals.sick_payment > 0 %}{{ "%.0f"|format(row.totals.sick_payment) }}{% else %}<span style="color:#ddd;">-</span>{% endif %}</td>
                     <td style="text-align: right; padding: 2px; background: #eff6ff;">{% if row.totals.standby_payment and row.totals.standby_payment > 0 %}{{ "%.0f"|format(row.totals.standby_payment) }}{% else %}<span style="color:#ddd;">-</span>{% endif %}</td>
                     <td style="text-align: right; padding: 2px; background: #fef3c7;">{% if row.totals.travel and row.totals.travel > 0 %}{{ "%.0f"|format(row.totals.travel) }}{% else %}<span style="color:#ddd;">-</span>{% endif %}</td>
                     <td style="text-align: right; padding: 2px; background: #f3e8ff;">{% if row.totals.extras and row.totals.extras > 0 %}{{ "%.0f"|format(row.totals.extras) }}{% else %}<span style="color:#ddd;">-</span>{% endif %}</td>
-                    <td style="background: #e7f5ff; font-weight: bold; padding: 2px; text-align: right;">{{ "{:,.0f}".format((row.totals.total_payment or row.totals.payment or 0)) }}</td>
+                    <td style="background: #e7f5ff; font-weight: bold; padding: 2px; text-align: right;">{{ "{:,.2f}".format((row.totals.rounded_total or row.totals.total_payment or 0)) }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -126,10 +128,11 @@
                     <td style="text-align: right; padding: 2px;">{% set v = grand_totals.actual_work_days or 0 %}{% if v > 0 %}{{ v }}{% endif %}</td>
                     <td style="text-align: right; padding: 2px;">{% set v = grand_totals.total_hours or 0 %}{% if v > 0 %}{{ (v|float/60)|round(0) }}{% endif %}</td>
                     <td style="text-align: right; padding: 2px;">{% set v = grand_totals.vacation_minutes or 0 %}{% if v > 0 %}{{ (v|float/60)|round(0) }}{% endif %}</td>
+                    <td style="text-align: right; padding: 2px; background: #b71c1c;">{% if grand_totals.sick_payment and grand_totals.sick_payment > 0 %}{{ "%.0f"|format(grand_totals.sick_payment) }}{% endif %}</td>
                     <td style="text-align: right; padding: 2px; background: #1e40af;">{% if grand_totals.standby_payment and grand_totals.standby_payment > 0 %}{{ "%.0f"|format(grand_totals.standby_payment) }}{% endif %}</td>
                     <td style="text-align: right; padding: 2px; background: #92400e;">{% if grand_totals.travel and grand_totals.travel > 0 %}{{ "%.0f"|format(grand_totals.travel) }}{% endif %}</td>
                     <td style="text-align: right; padding: 2px; background: #6b21a8;">{% if grand_totals.extras and grand_totals.extras > 0 %}{{ "%.0f"|format(grand_totals.extras) }}{% endif %}</td>
-                    <td style="background: #444; padding: 2px; text-align: right;">{{ "{:,.0f}".format(grand_totals.total_payment or 0) }}</td>
+                    <td style="background: #444; padding: 2px; text-align: right;">{{ "{:,.2f}".format(grand_totals.rounded_total or 0) }}</td>
                 </tr>
             </tfoot>
         </table>

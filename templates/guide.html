@@ -406,6 +406,9 @@
     {% endif %}
   </form>
 
+  {# סה"כ מעוגל - מחושב ב-Python, מבטיח שסכום השורות = סה"כ לתשלום #}
+  {% set rounded_total = monthly_totals.rounded_total or monthly_totals.total_payment or 0 %}
+
   <div class="tabs">
     <div class="no-print"
       style="background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%); border: 1px solid #cbd5e1; padding: 10px 14px; border-radius: 8px; margin-bottom: 12px;">
@@ -423,7 +426,7 @@
         <div style="background: #059669; border-radius: 6px; padding: 4px 10px;">
           <span style="font-size: 12px; color: rgba(255,255,255,0.85);">לתשלום:</span>
           <span style="font-size: 16px; font-weight: 700; color: white;">{{
-            "{:,.2f}".format(monthly_totals.total_payment or 0) }}</span>
+            "{:,.2f}".format(rounded_total) }}</span>
         </div>
 
         <div style="height: 20px; border-left: 1px solid #cbd5e1;"></div>
@@ -1054,8 +1057,8 @@
                 </tr>
                 {% endif %}
 
-                {# שורת מחלה - מוצגת רק אם יש #}
-                {% if (monthly_totals.sick_payment or 0) > 0 %}
+                {# שורת מחלה - מוצגת אם יש ימי מחלה (גם אם יום ראשון בלי תשלום) #}
+                {% if (monthly_totals.sick_minutes or 0) > 0 or (monthly_totals.sick_days_taken or 0) > 0 %}
                 <tr style="background-color: #ffebee; font-weight: bold; border-top: 1px solid #ccc;">
                   <td style="text-align: right; padding: 6px 8px;">
                     <strong>ימי מחלה:</strong>
@@ -1100,7 +1103,7 @@
                   </td>
                   <td
                     style="text-align: center; padding: 6px 8px; font-weight: bold; font-size: 1.1em; color: #1a365d;">
-                    {{ "%.2f"|format(monthly_totals.total_payment or 0) }}
+                    {{ "%.2f"|format(rounded_total) }}
                   </td>
                   <td style="text-align: center; padding: 6px 8px; font-size: 0.85em;">
                     {{ "%.2f"|format(monthly_totals.standby_payment or 0) }}
@@ -1332,8 +1335,8 @@
                 <tr>
                   <th>תיאור רכיב</th>
                   <th>קוד מירב</th>
-                  <th>כמות (שעות/יחידות)</th>
-                  <th>תעריף / אחוז</th>
+                  <th>כמות</th>
+                  <th>תעריף</th>
                   <th>סה"כ לתשלום</th>
                 </tr>
               </thead>
@@ -1356,6 +1359,35 @@
                   {% elif key == 'calc150_shabbat_50' %}{% set row_class = "row-shabbat-50" %}
                   {% endif %}
 
+                  {# חישוב סכום השורה #}
+                  {% set row_total = 0 %}
+                  {% if key == 'standby' %}
+                    {% set row_total = monthly_totals.standby_payment or 0 %}
+                  {% elif key == 'vacation' %}
+                    {% set row_total = monthly_totals.vacation_payment or 0 %}
+                  {% elif key == 'travel' or key == 'extras' or key == 'sick_payment' %}
+                    {% set row_total = val %}
+                  {% elif key == 'calc_variable' %}
+                    {% set var_hours_rounded = (val | float / 60) | round(2) %}
+                    {% set var_payment = monthly_totals.payment_calc_variable or 0 %}
+                    {% set effective_rate = (var_payment / var_hours_rounded) | round(2) if var_hours_rounded > 0 else 0 %}
+                    {% set row_total = var_hours_rounded * effective_rate %}
+                  {% elif key == 'calc100' %}
+                    {% set hours_rounded = (val | float / 60) | round(2) %}
+                    {% set row_total = hours_rounded * hourly_rate %}
+                  {% else %}
+                    {% set hours_rounded = (val | float / 60) | round(2) %}
+                    {% set multiplier = 1.0 %}
+                    {% if key == 'calc150_shabbat_100' %}{% set multiplier = 1.0 %}
+                    {% elif key == 'calc150_shabbat_50' %}{% set multiplier = 0.5 %}
+                    {% elif '125' in key %}{% set multiplier = 1.25 %}
+                    {% elif '150' in key %}{% set multiplier = 1.5 %}
+                    {% elif '175' in key %}{% set multiplier = 1.75 %}
+                    {% elif '200' in key %}{% set multiplier = 2.0 %}
+                    {% endif %}
+                    {% set row_total = hours_rounded * hourly_rate * multiplier %}
+                  {% endif %}
+
                   <tr class="{{ row_class }}">
                     <td>{{ code.display_name }}</td>
                     <td>{{ code.merav_code or '' }}</td>
@@ -1368,7 +1400,7 @@
                     {% elif key == 'vacation' %}
                     <td>{{ (val | float / 60) | round(2) }}</td>
                     <td>{{ "%.2f"|format(hourly_rate) }} ₪</td>
-                    <td>{{ monthly_totals.vacation_payment | format_currency }}</td>
+                    <td>{{ (monthly_totals.vacation_payment or 0) | format_currency }}</td>
                     {% elif key == 'travel' %}
                     {# נסיעות - סכום ישיר בשקלים, לא שעות #}
                     <td>-</td>
@@ -1386,17 +1418,23 @@
                     <td>{{ "%.2f"|format(hourly_rate) }} ₪</td>
                     <td>{{ val | format_currency }}</td>
                     {% elif key == 'calc_variable' %}
-                    {# שעות בתעריף משתנה - תעריף שונה משכר מינימום #}
-                    <td>{{ (val | float / 60) | round(2) }}</td>
-                    <td>{{ "%.2f"|format(monthly_totals.variable_rate_value or 0) }} ₪</td>
-                    <td>{{ (monthly_totals.payment_calc_variable or 0) | format_currency }}</td>
+                    {# שעות בתעריף משתנה - חישוב עם עיגול כמו כל המשמרות #}
+                    {% set var_hours_rounded = (val | float / 60) | round(2) %}
+                    {% set var_payment = monthly_totals.payment_calc_variable or 0 %}
+                    {% set effective_rate = (var_payment / var_hours_rounded) | round(2) if var_hours_rounded > 0 else 0 %}
+                    <td>{{ var_hours_rounded }}</td>
+                    <td>{{ "%.2f"|format(effective_rate) }} ₪</td>
+                    <td>{{ (var_hours_rounded * effective_rate) | format_currency }}</td>
                     {% elif key == 'calc100' %}
-                    {# שעות 100% - שעות רגילות בשכר מינימום #}
-                    <td>{{ (val | float / 60) | round(2) }}</td>
+                    {# שעות 100% - שעות רגילות בשכר מינימום, חישוב תואם למירב #}
+                    {% set hours_rounded = (val | float / 60) | round(2) %}
+                    <td>{{ hours_rounded }}</td>
                     <td>{{ "%.2f"|format(hourly_rate) }} ₪</td>
-                    <td>{{ ((val | float / 60) * hourly_rate) | format_currency }}</td>
+                    <td>{{ (hours_rounded * hourly_rate) | format_currency }}</td>
                     {% else %}
-                    <td>{{ (val | float / 60) | round(2) }}</td>
+                    {# שעות עם אחוזים - חישוב תואם למירב (שעות מעוגלות × תעריף) #}
+                    {% set hours_rounded = (val | float / 60) | round(2) %}
+                    <td>{{ hours_rounded }}</td>
 
                     {% set multiplier = 1.0 %}
                     {% if key == 'calc150_shabbat_100' %}{% set multiplier = 1.0 %}
@@ -1407,20 +1445,9 @@
                     {% elif '200' in key %}{% set multiplier = 2.0 %}
                     {% endif %}
 
-                    {# For regular hours, always use minimum wage #}
                     <td>{{ "%.2f"|format(hourly_rate * multiplier) }} ₪</td>
-                    {% set payment_key = 'payment_' ~ key %}
-
-                    {# Special handling for split shabbat payments if not directly in monthly_totals #}
-                    {% if key == 'calc150_shabbat_100' %}
-                    <td>{{ ((val | float / 60) * hourly_rate * 1.0) | format_currency }}</td>
-                    {% elif key == 'calc150_shabbat_50' %}
-                    <td>{{ ((val | float / 60) * hourly_rate * 0.5) | format_currency }}</td>
-                    {% elif monthly_totals[payment_key] is defined and monthly_totals[payment_key] > 0 %}
-                    <td>{{ monthly_totals[payment_key] | format_currency }}</td>
-                    {% else %}
-                    <td>{{ ((val | float / 60) * hourly_rate * multiplier) | format_currency }}</td>
-                    {% endif %}
+                    {# חישוב תואם למירב - שעות מעוגלות × תעריף #}
+                    <td>{{ (hours_rounded * hourly_rate * multiplier) | format_currency }}</td>
                     {% endif %}
                   </tr>
                   {% endif %}
@@ -1430,70 +1457,66 @@
                   <!-- 100% - שעות רגילות -->
                   {% set calc100_minutes = monthly_totals.calc100 | float %}
                   {% if calc100_minutes > 0 %}
+                  {% set calc100_hours = (calc100_minutes / 60) | round(2) %}
                   <tr>
                     <td>שעות רגילות (100%)</td>
                     <td>{{ codes_map.get('calc100', '') }}</td>
-                    <td>{{ (calc100_minutes / 60) | round(2) }}</td>
+                    <td>{{ calc100_hours }}</td>
                     <td>{{ "%.2f"|format(hourly_rate) }} ₪</td>
-                    <td>{{ ((calc100_minutes / 60) * hourly_rate) | format_currency }}</td>
+                    <td>{{ (calc100_hours * hourly_rate) | format_currency }}</td>
                   </tr>
                   {% endif %}
                   <!-- 125% -->
+                  {% set calc125_minutes = monthly_totals.calc125 | float %}
+                  {% set calc125_hours = (calc125_minutes / 60) | round(2) %}
                   <tr>
                     <td>שעות נוספות (125%)</td>
                     <td>{{ codes_map.get('calc125', '') }}</td>
-                    <td>{{ (monthly_totals.calc125 | float / 60) | round(2) }}</td>
+                    <td>{{ calc125_hours }}</td>
                     <td>{{ "%.2f"|format(hourly_rate * 1.25) }} ₪</td>
-                    <td>{{ ((monthly_totals.calc125 | float / 60) * hourly_rate * 1.25) | format_currency }}</td>
+                    <td>{{ (calc125_hours * hourly_rate * 1.25) | format_currency }}</td>
                   </tr>
                   <!-- 150% overtime (not Shabbat) -->
+                  {% set calc150_overtime_minutes = monthly_totals.calc150_overtime | float %}
+                  {% set calc150_overtime_hours = (calc150_overtime_minutes / 60) | round(2) %}
                   <tr>
                     <td>שעות נוספות (150%)</td>
                     <td>{{ codes_map.get('calc150_overtime', '') }}</td>
-                    <td>{{ (monthly_totals.calc150_overtime | float / 60) | round(2) }}</td>
+                    <td>{{ calc150_overtime_hours }}</td>
                     <td>{{ "%.2f"|format(hourly_rate * 1.5) }} ₪</td>
-                    <td>
-                      {% if monthly_totals.get('payment_calc150_overtime') %}
-                      {{ monthly_totals.payment_calc150_overtime | format_currency }}
-                      {% else %}
-                      {{ ((monthly_totals.calc150_overtime | float / 60) * hourly_rate * 1.5) | format_currency }}
-                      {% endif %}
-                    </td>
+                    <td>{{ (calc150_overtime_hours * hourly_rate * 1.5) | format_currency }}</td>
                   </tr>
                   <!-- 150% Shabbat -->
                   {% set calc150_shabbat_minutes = monthly_totals.get('calc150_shabbat', 0) or 0 %}
-                  {% set calc150_shabbat_hours_val = (calc150_shabbat_minutes | float) / 60 %}
-                  {% if calc150_shabbat_hours_val > 0.01 %}
+                  {% set calc150_shabbat_hours = (calc150_shabbat_minutes / 60) | round(2) %}
+                  {% if calc150_shabbat_hours > 0.01 %}
                   <tr>
                     <td>שעות שבת (150%)</td>
                     <td>{{ codes_map.get('calc150_shabbat', '') }}</td>
-                    <td>{{ calc150_shabbat_hours_val | round(2) }}</td>
+                    <td>{{ calc150_shabbat_hours }}</td>
                     <td>{{ "%.2f"|format(hourly_rate * 1.5) }} ₪</td>
-                    <td>
-                      {% if monthly_totals.get('payment_calc150_shabbat') and monthly_totals.payment_calc150_shabbat > 0
-                      %}
-                      {{ monthly_totals.payment_calc150_shabbat | format_currency }}
-                      {% else %}
-                      {{ (calc150_shabbat_hours_val * hourly_rate * 1.5) | format_currency }}
-                      {% endif %}
-                    </td>
+                    <td>{{ (calc150_shabbat_hours * hourly_rate * 1.5) | format_currency }}</td>
                   </tr>
                   {% endif %}
                   <!-- 175% -->
+                  {% set calc175_minutes = monthly_totals.calc175 | float %}
+                  {% set calc175_hours = (calc175_minutes / 60) | round(2) %}
                   <tr>
                     <td>שעות שבת (175%)</td>
                     <td>{{ codes_map.get('calc175', '') }}</td>
-                    <td>{{ (monthly_totals.calc175 | float / 60) | round(2) }}</td>
+                    <td>{{ calc175_hours }}</td>
                     <td>{{ "%.2f"|format(hourly_rate * 1.75) }} ₪</td>
-                    <td>{{ ((monthly_totals.calc175 | float / 60) * hourly_rate * 1.75) | format_currency }}</td>
+                    <td>{{ (calc175_hours * hourly_rate * 1.75) | format_currency }}</td>
                   </tr>
                   <!-- 200% -->
+                  {% set calc200_minutes = monthly_totals.calc200 | float %}
+                  {% set calc200_hours = (calc200_minutes / 60) | round(2) %}
                   <tr>
                     <td>שעות שבת (200%)</td>
                     <td>{{ codes_map.get('calc200', '') }}</td>
-                    <td>{{ (monthly_totals.calc200 | float / 60) | round(2) }}</td>
+                    <td>{{ calc200_hours }}</td>
                     <td>{{ "%.2f"|format(hourly_rate * 2.0) }} ₪</td>
-                    <td>{{ ((monthly_totals.calc200 | float / 60) * hourly_rate * 2.0) | format_currency }}</td>
+                    <td>{{ (calc200_hours * hourly_rate * 2.0) | format_currency }}</td>
                   </tr>
 
                   <!-- כוננויות -->
@@ -1560,7 +1583,7 @@
                     <td></td>
                     <td>-</td>
                     <td>-</td>
-                    <td>{{ (monthly_totals.total_payment or 0) | format_currency }}</td>
+                    <td>{{ rounded_total | format_currency }}</td>
                   </tr>
               </tbody>
             </table>

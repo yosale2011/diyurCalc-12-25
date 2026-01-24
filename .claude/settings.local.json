@@ -47,7 +47,8 @@
       "Bash(py -m pytest tests/test_salary_calculation.py -v)",
       "Bash(py:*)",
       "Bash(timeout 5 uvicorn:*)",
-      "Bash(f:)"
+      "Bash(f:)",
+      "Bash(pytest:*)"
     ],
     "deny": [],
     "ask": []

@@ -189,7 +189,9 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
     grand_totals.update({
         "payment": 0, "standby_payment": 0, "travel": 0, "extras": 0, "total_payment": 0,
         "calc150_shabbat_100": 0, "calc150_shabbat_50": 0,
-        "vacation_payment": 0, "vacation_minutes": 0
+        "vacation_payment": 0, "vacation_minutes": 0,
+        "sick_payment": 0, "sick_minutes": 0,  # מחלה
+        "rounded_total": 0  # סה"כ מעוגל - סכום השורות עם עיגול
     })
 
     for p in people:
@@ -209,9 +211,10 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
 
             grand_totals["payment"] += monthly_totals.get("payment", 0)
             grand_totals["total_payment"] += monthly_totals.get("total_payment", 0)
+            grand_totals["rounded_total"] += monthly_totals.get("rounded_total", 0)
 
             for k, v in monthly_totals.items():
-                if k in grand_totals and isinstance(v, (int, float)) and k not in ("payment", "total_payment"):
+                if k in grand_totals and isinstance(v, (int, float)) and k not in ("payment", "total_payment", "rounded_total"):
                     grand_totals[k] += v
 
     return summary_data, grand_totals

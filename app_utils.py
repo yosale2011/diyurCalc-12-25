@@ -2801,8 +2801,8 @@ def aggregate_daily_segments_to_monthly(
     # ספירת כוננויות
     monthly_totals["standby"] = len(standby_days_set)
 
-    # ימי עבודה בפועל
-    monthly_totals["actual_work_days"] = len(work_days_set)
+    # ימי עבודה בפועל (כולל חופשה ומחלה)
+    monthly_totals["actual_work_days"] = len(work_days_set | vacation_days_set | sick_days_set)
 
     # ימי חופשה שנוצלו
     monthly_totals["vacation_days_taken"] = len(vacation_days_set)
@@ -2885,5 +2885,48 @@ def aggregate_daily_segments_to_monthly(
 
     # שמירת שכר אפקטיבי
     monthly_totals["effective_hourly_rate"] = minimum_wage
+
+    # חישוב סה"כ מעוגל - שעות מעוגלות × תעריף = סכום
+    # זה מבטיח שסכום השורות = סה"כ לתשלום
+    rounded_total = 0.0
+
+    # calc100: שעות מעוגלות × תעריף
+    calc100_hours = round(monthly_totals["calc100"] / 60, 2)
+    rounded_total += calc100_hours * minimum_wage
+
+    # calc125: שעות מעוגלות × תעריף × 1.25
+    calc125_hours = round(monthly_totals["calc125"] / 60, 2)
+    rounded_total += calc125_hours * minimum_wage * 1.25
+
+    # calc150_overtime: שעות מעוגלות × תעריף × 1.5
+    calc150_overtime_hours = round(monthly_totals.get("calc150_overtime", 0) / 60, 2)
+    rounded_total += calc150_overtime_hours * minimum_wage * 1.5
+
+    # calc150_shabbat: שעות מעוגלות × תעריף × 1.5
+    calc150_shabbat_hours = round(monthly_totals.get("calc150_shabbat", 0) / 60, 2)
+    rounded_total += calc150_shabbat_hours * minimum_wage * 1.5
+
+    # calc175: שעות מעוגלות × תעריף × 1.75
+    calc175_hours = round(monthly_totals["calc175"] / 60, 2)
+    rounded_total += calc175_hours * minimum_wage * 1.75
+
+    # calc200: שעות מעוגלות × תעריף × 2.0
+    calc200_hours = round(monthly_totals["calc200"] / 60, 2)
+    rounded_total += calc200_hours * minimum_wage * 2.0
+
+    # calc_variable: שעות מעוגלות × תעריף אפקטיבי מעוגל
+    calc_variable_hours = round(monthly_totals["calc_variable"] / 60, 2)
+    if calc_variable_hours > 0:
+        effective_var_rate = round(monthly_totals["payment_calc_variable"] / calc_variable_hours, 2)
+        rounded_total += calc_variable_hours * effective_var_rate
+
+    # סכומים ישירים (לא צריכים עיגול של שעות)
+    rounded_total += monthly_totals["vacation_payment"]
+    rounded_total += monthly_totals["sick_payment"]
+    rounded_total += monthly_totals["standby_payment"]
+    rounded_total += monthly_totals["travel"]
+    rounded_total += monthly_totals["extras"]
+
+    monthly_totals["rounded_total"] = round(rounded_total, 2)
 
     return monthly_totals
