@@ -48,7 +48,10 @@
       "Bash(py:*)",
       "Bash(timeout 5 uvicorn:*)",
       "Bash(f:)",
-      "Bash(pytest:*)"
+      "Bash(pytest:*)",
+      "Bash(where:*)",
+      "Bash(git restore:*)",
+      "Bash(git stash show:*)"
     ],
     "deny": [],
     "ask": []

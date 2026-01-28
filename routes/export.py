@@ -224,7 +224,7 @@ def export_excel(year: Optional[int] = None, month: Optional[int] = None) -> Res
                 'שם': person_data.get('name', ''),
                 'קוד מירב': person_data.get('merav_code', ''),
                 'שעות עבודה': round(totals.get('total_hours', 0) / 60, 2),
-                'תשלום': round(totals.get('total_payment', 0), 2),
+                'תשלום': round(totals.get('rounded_total', 0) or totals.get('total_payment', 0), 2),
                 'כוננויות': totals.get('standby', 0),
                 'תשלום כוננויות': round(totals.get('standby_payment', 0), 2),
                 'ימי עבודה': totals.get('actual_work_days', 0),
@@ -250,7 +250,7 @@ def export_excel(year: Optional[int] = None, month: Optional[int] = None) -> Res
         # Grand totals sheet
         grand_totals_data = [{
             'סה"כ שעות עבודה': round(grand_totals.get('total_hours', 0) / 60, 2),
-            'סה"כ לתשלום': round(grand_totals.get('payment', 0), 2),
+            'סה"כ לתשלום': round(grand_totals.get('rounded_total', 0) or grand_totals.get('payment', 0), 2),
             'סה"כ כוננויות': grand_totals.get('standby', 0),
             'תשלום כוננויות': round(grand_totals.get('standby_payment', 0), 2),
             'ימי עבודה': grand_totals.get('actual_work_days', 0),

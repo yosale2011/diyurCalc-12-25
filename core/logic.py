@@ -167,9 +167,14 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
     Uses the unified calculation logic from app_utils (get_daily_segments_data +
     aggregate_daily_segments_to_monthly) which is the source of truth for wage calculation.
     """
-    from core.history import get_minimum_wage_for_month
+    from core.history import (
+        get_minimum_wage_for_month,
+        get_all_person_statuses_for_month,
+        get_all_apartment_types_for_month,
+    )
     from core.database import PostgresConnection
     from app_utils import get_daily_segments_data, aggregate_daily_segments_to_monthly
+    from utils.utils import month_range_ts
 
     payment_codes = get_payment_codes(conn)
 
@@ -184,6 +189,22 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
     # Wrap the raw psycopg2 connection in PostgresConnection for app_utils compatibility
     conn_wrapper = PostgresConnection(conn, use_pool=False)
 
+    # Pre-load all caches ONCE for the entire month (optimization)
+    person_ids = [p["id"] for p in people]
+    person_status_cache = get_all_person_statuses_for_month(conn, person_ids, year, month)
+
+    # Get all apartment IDs used by active people this month
+    start_dt, end_dt = month_range_ts(year, month)
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    cursor.execute("""
+        SELECT DISTINCT apartment_id
+        FROM time_reports
+        WHERE person_id = ANY(%s) AND date >= %s AND date < %s AND apartment_id IS NOT NULL
+    """, (person_ids, start_dt.date(), end_dt.date()))
+    all_apartment_ids = [r["apartment_id"] for r in cursor.fetchall()]
+    cursor.close()
+    apartment_type_cache = get_all_apartment_types_for_month(conn, all_apartment_ids, year, month)
+
     summary_data = []
     grand_totals = {code["internal_key"]: 0 for code in payment_codes}
     grand_totals.update({
@@ -197,9 +218,11 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
     for p in people:
         pid = p["id"]
 
-        # Use the unified calculation from app_utils (source of truth)
+        # Use the unified calculation from app_utils with pre-loaded caches
         daily_segments, _ = get_daily_segments_data(
-            conn_wrapper, pid, year, month, shabbat_cache, minimum_wage
+            conn_wrapper, pid, year, month, shabbat_cache, minimum_wage,
+            person_status_cache=person_status_cache,
+            apartment_type_cache=apartment_type_cache
         )
 
         monthly_totals = aggregate_daily_segments_to_monthly(

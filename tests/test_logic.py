@@ -229,39 +229,54 @@ class TestSickPaymentRate(unittest.TestCase):
 
 
 class TestEffectiveHourlyRate(unittest.TestCase):
-    """Test effective hourly rate calculation."""
+    """Test effective hourly rate calculation with housing rates."""
 
     def test_custom_rate_used(self):
-        """Test that custom shift rate is used when provided."""
-        # shift_rate is stored in agorot (1/100 of shekel)
-        report = {'shift_rate': 5000}  # 50.00 shekels/hour
+        """Test that custom rate from housing_rates_cache is used."""
+        report = {'shift_type_id': 101, 'housing_array_id': 1, 'is_married': False}
         minimum_wage = 32.30
-        self.assertEqual(get_effective_hourly_rate(report, minimum_wage), 50.0)
+        # תעריף קבוע 50 ש"ח (5000 אגורות)
+        housing_rates_cache = {
+            (101, 1): {'weekday_single_rate': 5000, 'weekday_single_wage_percentage': None,
+                       'weekday_married_rate': None, 'weekday_married_wage_percentage': None,
+                       'shabbat_rate': None, 'shabbat_wage_percentage': None}
+        }
+        self.assertEqual(get_effective_hourly_rate(report, minimum_wage, False, housing_rates_cache), 50.0)
 
     def test_minimum_wage_when_no_rate(self):
-        """Test that minimum wage is used when no shift rate."""
+        """Test that minimum wage is used when no housing rate defined."""
         report = {}
         minimum_wage = 32.30
         self.assertEqual(get_effective_hourly_rate(report, minimum_wage), 32.30)
 
     def test_minimum_wage_when_rate_none(self):
-        """Test that minimum wage is used when shift_rate is None."""
-        report = {'shift_rate': None}
+        """Test that minimum wage is used when housing_rates_cache is None."""
+        report = {'shift_type_id': 101, 'housing_array_id': 1}
         minimum_wage = 32.30
-        self.assertEqual(get_effective_hourly_rate(report, minimum_wage), 32.30)
+        self.assertEqual(get_effective_hourly_rate(report, minimum_wage, False, None), 32.30)
 
     def test_minimum_wage_when_rate_zero(self):
-        """Test that minimum wage is used when shift_rate is 0."""
-        report = {'shift_rate': 0}
+        """Test that minimum wage is used when all rate fields are empty."""
+        report = {'shift_type_id': 101, 'housing_array_id': 1, 'is_married': False}
         minimum_wage = 32.30
-        self.assertEqual(get_effective_hourly_rate(report, minimum_wage), 32.30)
+        housing_rates_cache = {
+            (101, 1): {'weekday_single_rate': None, 'weekday_single_wage_percentage': None,
+                       'weekday_married_rate': None, 'weekday_married_wage_percentage': None,
+                       'shabbat_rate': None, 'shabbat_wage_percentage': None}
+        }
+        self.assertEqual(get_effective_hourly_rate(report, minimum_wage, False, housing_rates_cache), 32.30)
 
     def test_rate_conversion_from_agorot(self):
-        """Test that shift_rate is correctly converted from agorot to shekels."""
+        """Test that rate is correctly converted from agorot to shekels."""
         # 3230 agorot = 32.30 shekels
-        report = {'shift_rate': 3230}
+        report = {'shift_type_id': 101, 'housing_array_id': 1, 'is_married': True}
         minimum_wage = 30.0
-        self.assertEqual(get_effective_hourly_rate(report, minimum_wage), 32.30)
+        housing_rates_cache = {
+            (101, 1): {'weekday_single_rate': None, 'weekday_single_wage_percentage': None,
+                       'weekday_married_rate': 3230, 'weekday_married_wage_percentage': None,
+                       'shabbat_rate': None, 'shabbat_wage_percentage': None}
+        }
+        self.assertEqual(get_effective_hourly_rate(report, minimum_wage, False, housing_rates_cache), 32.30)
 
 
     # def test_overlap_percentage(self):

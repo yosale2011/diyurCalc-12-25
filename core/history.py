@@ -6,7 +6,7 @@ Uses "save on change" approach - current data is used unless there's a historica
 from __future__ import annotations
 
 import logging
-from typing import Optional, Any
+from typing import Optional, Any, List, Dict
 from datetime import datetime
 
 import psycopg2.extras
@@ -119,6 +119,95 @@ def get_apartment_type_for_month(conn, apartment_id: int, year: int, month: int)
             return apartment["apartment_type_id"]
 
         return None
+    finally:
+        cursor.close()
+
+
+def get_all_person_statuses_for_month(
+    conn, person_ids: List[int], year: int, month: int
+) -> Dict[int, dict]:
+    """
+    טעינת סטטוס כל העובדים בשאילתה אחת.
+
+    Returns:
+        dict mapping person_id to {is_married, employer_id, employee_type}
+    """
+    if not person_ids:
+        return {}
+
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    result = {}
+    try:
+        # Single query with DISTINCT ON to get historical records
+        placeholders = ",".join(["%s"] * len(person_ids))
+        cursor.execute(f"""
+            WITH historical AS (
+                SELECT DISTINCT ON (person_id)
+                    person_id, is_married, employer_id, employee_type
+                FROM person_status_history
+                WHERE person_id IN ({placeholders})
+                  AND (year > %s OR (year = %s AND month > %s))
+                ORDER BY person_id, year ASC, month ASC
+            )
+            SELECT
+                p.id as person_id,
+                COALESCE(h.is_married, p.is_married) as is_married,
+                COALESCE(h.employer_id, p.employer_id) as employer_id,
+                COALESCE(h.employee_type, p.type) as employee_type
+            FROM people p
+            LEFT JOIN historical h ON h.person_id = p.id
+            WHERE p.id IN ({placeholders})
+        """, (*person_ids, year, year, month, *person_ids))
+
+        for row in cursor.fetchall():
+            result[row["person_id"]] = {
+                "is_married": row["is_married"],
+                "employer_id": row["employer_id"],
+                "employee_type": row["employee_type"]
+            }
+
+        return result
+    finally:
+        cursor.close()
+
+
+def get_all_apartment_types_for_month(
+    conn, apartment_ids: List[int], year: int, month: int
+) -> Dict[int, Optional[int]]:
+    """
+    טעינת סוג כל הדירות בשאילתה אחת.
+
+    Returns:
+        dict mapping apartment_id to apartment_type_id
+    """
+    if not apartment_ids:
+        return {}
+
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    result = {}
+    try:
+        placeholders = ",".join(["%s"] * len(apartment_ids))
+        cursor.execute(f"""
+            WITH historical AS (
+                SELECT DISTINCT ON (apartment_id)
+                    apartment_id, apartment_type_id
+                FROM apartment_status_history
+                WHERE apartment_id IN ({placeholders})
+                  AND (year > %s OR (year = %s AND month > %s))
+                ORDER BY apartment_id, year ASC, month ASC
+            )
+            SELECT
+                a.id as apartment_id,
+                COALESCE(h.apartment_type_id, a.apartment_type_id) as apartment_type_id
+            FROM apartments a
+            LEFT JOIN historical h ON h.apartment_id = a.id
+            WHERE a.id IN ({placeholders})
+        """, (*apartment_ids, year, year, month, *apartment_ids))
+
+        for row in cursor.fetchall():
+            result[row["apartment_id"]] = row["apartment_type_id"]
+
+        return result
     finally:
         cursor.close()
 
@@ -314,162 +403,76 @@ def unlock_month(conn, year: int, month: int, unlocked_by: int) -> bool:
 
 
 # ============================================================================
-# Shift Types History Functions
+# Shift Type Housing Rates History Functions
 # ============================================================================
 
-def get_shift_rate_for_month(
-    conn,
-    shift_type_id: int,
-    year: int,
-    month: int
-) -> Optional[dict]:
+def get_all_housing_rates_for_month(conn, year: int = None, month: int = None) -> dict:
     """
-    Get shift rate for a specific month.
-    First checks history table using "valid until" logic, falls back to current data.
-    
-    History records store (year, month) as "valid until" - meaning the old value
-    was valid up to but NOT including that month.
+    טעינת כל תעריפי מערכי הדיור בשאילתה אחת.
+
+    אם year ו-month מסופקים, בודק קודם בטבלת ההיסטוריה.
+    רשומות היסטוריה שומרות (year, month) כ-"valid until" - כלומר הערך הישן
+    היה תקף עד (לא כולל) החודש הזה.
 
     Returns:
-        dict with keys: rate, is_minimum_wage, wage_percentage, or None if not found
-    """
-    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    try:
-        # Find a historical record where the requested month is covered
-        cursor.execute("""
-            SELECT rate, is_minimum_wage, wage_percentage
-            FROM shift_types_history
-            WHERE shift_type_id = %s
-              AND (year > %s OR (year = %s AND month > %s))
-            ORDER BY year ASC, month ASC
-            LIMIT 1
-        """, (shift_type_id, year, year, month))
-
-        history = cursor.fetchone()
-
-        if history:
-            logger.debug(f"Using historical rate for shift_type {shift_type_id} ({year}/{month})")
-            return {
-                "rate": history["rate"],
-                "is_minimum_wage": history["is_minimum_wage"],
-                "wage_percentage": history["wage_percentage"]
-            }
-
-        # No history covers this month - use current data from shift_types table
-        cursor.execute("""
-            SELECT rate, is_minimum_wage, wage_percentage
-            FROM shift_types
-            WHERE id = %s
-        """, (shift_type_id,))
-
-        shift_type = cursor.fetchone()
-
-        if shift_type:
-            return {
-                "rate": shift_type["rate"],
-                "is_minimum_wage": shift_type["is_minimum_wage"],
-                "wage_percentage": shift_type["wage_percentage"]
-            }
-
-        return None
-    finally:
-        cursor.close()
-
-
-def save_shift_rate_to_history(
-    conn,
-    shift_type_id: int,
-    year: int,
-    month: int,
-    rate: int,
-    is_minimum_wage: bool,
-    created_by: int = None,
-    wage_percentage: int = 100
-) -> bool:
-    """
-    Save shift rate to history before a change.
-    Called before updating shift_types.rate.
-
-    Returns:
-        True if saved successfully
-    """
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            INSERT INTO shift_types_history
-            (shift_type_id, year, month, rate, is_minimum_wage, wage_percentage, created_by)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            ON CONFLICT (shift_type_id, year, month)
-            DO UPDATE SET
-                rate = EXCLUDED.rate,
-                is_minimum_wage = EXCLUDED.is_minimum_wage,
-                wage_percentage = EXCLUDED.wage_percentage,
-                created_by = EXCLUDED.created_by,
-                created_at = NOW()
-        """, (shift_type_id, year, month, rate, is_minimum_wage, wage_percentage, created_by))
-
-        conn.commit()
-        logger.info(f"Saved shift_type {shift_type_id} rate history for {year}/{month}")
-        return True
-    except Exception as e:
-        logger.error(f"Error saving shift rate history: {e}")
-        return False
-    finally:
-        cursor.close()
-
-
-def get_all_shift_rates_for_month(conn, year: int, month: int) -> dict:
-    """
-    Get all shift rates for a specific month as a cache dictionary.
-    First checks history table using "valid until" logic, falls back to current data.
-
-    History records store (year, month) as "valid until" - meaning the old value
-    was valid up to but NOT including that month.
-
-    Returns:
-        dict mapping shift_type_id to {rate, is_minimum_wage, wage_percentage}
+        dict: מיפוי (shift_type_id, housing_array_id) -> rate_info
     """
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
     result = {}
     try:
-        # Get all shift types first
-        cursor.execute("SELECT id FROM shift_types")
-        all_shift_ids = [row["id"] for row in cursor.fetchall()]
-
-        # For each shift type, find the appropriate rate
-        for shift_type_id in all_shift_ids:
-            # Check for historical rate using "valid until" logic
+        if year is not None and month is not None:
+            # שאילתה עם תמיכה בהיסטוריה
             cursor.execute("""
-                SELECT rate, is_minimum_wage, wage_percentage
-                FROM shift_types_history
-                WHERE shift_type_id = %s
-                  AND (year > %s OR (year = %s AND month > %s))
-                ORDER BY year ASC, month ASC
-                LIMIT 1
-            """, (shift_type_id, year, year, month))
+                WITH historical AS (
+                    SELECT DISTINCT ON (shift_type_id, housing_array_id)
+                        shift_type_id, housing_array_id,
+                        weekday_single_rate, weekday_single_wage_percentage,
+                        weekday_married_rate, weekday_married_wage_percentage,
+                        shabbat_rate, shabbat_wage_percentage
+                    FROM shift_type_housing_rates_history
+                    WHERE (year > %s OR (year = %s AND month > %s))
+                    ORDER BY shift_type_id, housing_array_id, year ASC, month ASC
+                )
+                SELECT
+                    sthr.shift_type_id,
+                    sthr.housing_array_id,
+                    COALESCE(h.weekday_single_rate, sthr.weekday_single_rate) as weekday_single_rate,
+                    COALESCE(h.weekday_single_wage_percentage, sthr.weekday_single_wage_percentage) as weekday_single_wage_percentage,
+                    COALESCE(h.weekday_married_rate, sthr.weekday_married_rate) as weekday_married_rate,
+                    COALESCE(h.weekday_married_wage_percentage, sthr.weekday_married_wage_percentage) as weekday_married_wage_percentage,
+                    COALESCE(h.shabbat_rate, sthr.shabbat_rate) as shabbat_rate,
+                    COALESCE(h.shabbat_wage_percentage, sthr.shabbat_wage_percentage) as shabbat_wage_percentage
+                FROM shift_type_housing_rates sthr
+                LEFT JOIN historical h ON h.shift_type_id = sthr.shift_type_id
+                    AND h.housing_array_id = sthr.housing_array_id
+                WHERE sthr.is_active = true
+            """, (year, year, month))
+        else:
+            # שאילתה פשוטה ללא היסטוריה
+            cursor.execute("""
+                SELECT
+                    shift_type_id,
+                    housing_array_id,
+                    weekday_single_rate,
+                    weekday_single_wage_percentage,
+                    weekday_married_rate,
+                    weekday_married_wage_percentage,
+                    shabbat_rate,
+                    shabbat_wage_percentage
+                FROM shift_type_housing_rates
+                WHERE is_active = true
+            """)
 
-            history = cursor.fetchone()
-
-            if history:
-                result[shift_type_id] = {
-                    "rate": history["rate"],
-                    "is_minimum_wage": history["is_minimum_wage"],
-                    "wage_percentage": history["wage_percentage"]
-                }
-            else:
-                # No history - use current rate
-                cursor.execute("""
-                    SELECT rate, is_minimum_wage, wage_percentage
-                    FROM shift_types
-                    WHERE id = %s
-                """, (shift_type_id,))
-                current = cursor.fetchone()
-                if current:
-                    result[shift_type_id] = {
-                        "rate": current["rate"],
-                        "is_minimum_wage": current["is_minimum_wage"],
-                        "wage_percentage": current["wage_percentage"]
-                    }
+        for row in cursor.fetchall():
+            key = (row["shift_type_id"], row["housing_array_id"])
+            result[key] = {
+                "weekday_single_rate": row["weekday_single_rate"],
+                "weekday_single_wage_percentage": row["weekday_single_wage_percentage"],
+                "weekday_married_rate": row["weekday_married_rate"],
+                "weekday_married_wage_percentage": row["weekday_married_wage_percentage"],
+                "shabbat_rate": row["shabbat_rate"],
+                "shabbat_wage_percentage": row["shabbat_wage_percentage"],
+            }
 
         return result
     finally:

@@ -2,6 +2,112 @@
 
 ---
 
+## גירסה 2.12 - 28/01/2026
+
+### ניקוי קוד - הסרת לוגיקת תעריפים ישנה
+
+**רקע**: לאחר המעבר לטבלה החדשה `shift_type_housing_rates`, הקוד הישן שהשתמש בשדות `rate`, `is_minimum_wage`, `wage_percentage` מטבלת `shift_types` הפך למיותר.
+
+#### קוד שנמחק
+
+**[core/history.py](../core/history.py)**
+*   פונקציה `get_shift_rate_for_month()` - הוחלפה ע"י `get_all_housing_rates_for_month()`
+*   פונקציה `save_shift_rate_to_history()` - לא נדרשת יותר
+*   פונקציה `get_all_shift_rates_for_month()` - הוחלפה ע"י `get_all_housing_rates_for_month()`
+
+**[app_utils.py](../app_utils.py)**
+*   הוסר פרמטר `shift_rates_cache` מ-`get_daily_segments_data()`
+*   הוסר קוד שהחליף `shift_rate` ו-`shift_is_minimum_wage` מ-cache היסטורי
+*   הוסרו שדות `st.rate AS shift_rate`, `st.is_minimum_wage AS shift_is_minimum_wage` משאילתות SQL
+
+**[core/logic.py](../core/logic.py)**
+*   הוסר ייבוא `get_all_shift_rates_for_month`
+*   הוסר בניית `shift_rates_cache`
+*   הוסר העברת `shift_rates_cache` ל-`get_daily_segments_data()`
+
+**[routes/admin.py](../routes/admin.py)**
+*   נמחקה פונקציה `update_shift_type_rate()` - API ישן לעדכון תעריף
+
+**[app.py](../app.py)**
+*   הוסר route `/api/shift-types/{shift_type_id}/rate`
+
+**סקריפטים שנמחקו**
+*   `scripts/check_all_rates.py` - סקריפט בדיקה ישן
+*   `scripts/update_demo_rates.py` - סקריפט עדכון demo ישן
+
+#### תמיכה בהיסטוריה
+
+`get_all_housing_rates_for_month()` עודכנה לתמוך בטבלת היסטוריה `shift_type_housing_rates_history`:
+*   אם מסופקים `year` ו-`month`, מחפשת רשומות היסטוריות לפי לוגיקת "valid until"
+*   רשומות היסטוריה מחליפות את הערכים הנוכחיים עבור חודשים קודמים
+
+#### הערה חשובה
+**השדות והטבלאות הבאים לא נמחקו מ-DB** (אפשר למחוק בעתיד):
+*   `shift_types.rate`
+*   `shift_types.is_minimum_wage`
+*   `shift_types.wage_percentage`
+*   טבלה `shift_types_history`
+
+---
+
+## גירסה 2.11 - 28/01/2026
+
+### תעריפי משמרות לפי מערך דיור
+
+**רקע**: הרחבת המערכת לתמיכה במערכי דיור נוספים, כאשר לכל מערך דיור יכולים להיות תעריפים שונים.
+
+#### שינויים בבסיס הנתונים
+*   **טבלה חדשה `housing_arrays`**: מערכי דיור (id, name)
+*   **טבלה חדשה `shift_type_housing_rates`**: תעריפים לפי סוג משמרת + מערך דיור
+    - `shift_type_id`: סוג המשמרת
+    - `housing_array_id`: מערך הדיור
+    - `weekday_single_rate` / `weekday_single_wage_percentage`: תעריף חול לרווק
+    - `weekday_married_rate` / `weekday_married_wage_percentage`: תעריף חול לנשוי
+    - `shabbat_rate` / `shabbat_wage_percentage`: תעריף שבת/חג
+*   **שדה חדש `housing_array_id`** בטבלאות `apartments` ו-`people`
+
+#### שינויים בקוד
+
+**[core/history.py](../core/history.py)**
+*   פונקציה חדשה `get_all_housing_rates_for_month()` - טוענת תעריפי מערכי דיור
+
+**[app_utils.py](../app_utils.py)**
+*   פונקציה חדשה `calculate_rate_from_housing_rates()` - חישוב תעריף לפי:
+    - שבת → `shabbat_rate` או `shabbat_wage_percentage × מינימום`
+    - חול נשוי → `weekday_married_rate` או `weekday_married_wage_percentage × מינימום`
+    - חול רווק → `weekday_single_rate` או `weekday_single_wage_percentage × מינימום`
+    - הכל ריק → שכר מינימום
+*   עדכון `get_effective_hourly_rate()` - תמיכה בפרמטרים `is_shabbat` ו-`housing_rates_cache`
+*   עדכון `get_daily_segments_data()`:
+    - שליפת `ap.housing_array_id` מהדירה (לא מהמדריך)
+    - שמירת שני תעריפים לכל משמרת: `{"weekday": rate, "shabbat": rate}`
+*   עדכון `_calculate_previous_month_carryover()` - אותם שינויים
+
+#### לוגיקת חישוב התעריף
+```
+1. קבלת housing_array_id מהדירה (apartments.housing_array_id)
+2. חיפוש ב-shift_type_housing_rates לפי (shift_type_id, housing_array_id)
+3. בחירת תעריף לפי:
+   - שבת/חג → shabbat_rate או shabbat_wage_percentage
+   - חול + נשוי → weekday_married_rate או weekday_married_wage_percentage
+   - חול + רווק → weekday_single_rate או weekday_single_wage_percentage
+4. אם אין תעריף מוגדר → שכר מינימום + תוספת סוג דירה
+```
+
+#### תוספת שעתית לפי סוג דירה
+*   **שדה חדש `hourly_wage_supplement`** בטבלת `apartment_types` (באגורות)
+*   כאשר אין תעריף ספציפי בטבלת `shift_type_housing_rates`, התשלום הוא:
+    ```
+    שכר מינימום + (hourly_wage_supplement / 100)
+    ```
+*   שימושי עבור סוגי דירות שדורשים תוספת קבועה לשעה מעבר לשכר מינימום
+
+#### בדיקות
+*   עדכון `TestEffectiveHourlyRate` ב-[tests/test_logic.py](../tests/test_logic.py) ללוגיקה החדשה
+*   129 בדיקות עברו בהצלחה
+
+---
+
 ## Code Review & Clean Code - 15/01/2026
 
 ### 1. איחוד קבועים למקור אמת יחיד (DRY)

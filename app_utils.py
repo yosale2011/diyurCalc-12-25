@@ -14,7 +14,7 @@ import psycopg2.extras
 
 from core.history import (
     get_apartment_type_for_month, get_person_status_for_month,
-    get_all_shift_rates_for_month
+    get_all_housing_rates_for_month
 )
 from core.sick_days import _identify_sick_day_sequences, get_sick_payment_rate
 
@@ -482,31 +482,88 @@ def _calculate_chain_wages(
 # Helper Functions
 # =============================================================================
 
-def get_effective_hourly_rate(report, minimum_wage: float) -> float:
+def calculate_rate_from_housing_rates(
+    rate_row: dict,
+    is_married: bool,
+    is_shabbat: bool,
+    minimum_wage: float,
+    hourly_wage_supplement: float = 0
+) -> float:
     """
-    Get the effective hourly rate for a shift.
-    If the shift has a custom rate defined, use that rate.
-    Otherwise, use the minimum wage.
+    חישוב תעריף שעתי מתוך נתוני shift_type_housing_rates.
 
     Args:
-        report: The report dict containing shift_rate and shift_is_minimum_wage
-        minimum_wage: The default minimum wage rate
+        rate_row: שורה מטבלת shift_type_housing_rates עם כל שדות התעריף
+        is_married: האם העובד נשוי
+        is_shabbat: האם זו משמרת בזמן שבת/חג
+        minimum_wage: שכר מינימום שעתי
+        hourly_wage_supplement: תוספת שעתית מסוג הדירה (באגורות)
 
     Returns:
-        The effective hourly rate to use for payment calculation
+        התעריף השעתי בשקלים
     """
-    shift_rate = report.get('shift_rate')
+    if is_shabbat:
+        rate = rate_row.get('shabbat_rate')
+        pct = rate_row.get('shabbat_wage_percentage')
+    elif is_married:
+        rate = rate_row.get('weekday_married_rate')
+        pct = rate_row.get('weekday_married_wage_percentage')
+    else:
+        rate = rate_row.get('weekday_single_rate')
+        pct = rate_row.get('weekday_single_wage_percentage')
 
-    # If shift has a custom rate, use it (regardless of is_minimum_wage flag)
-    if shift_rate:
-        rate = float(shift_rate) / 100  # shift_rate is stored in agorot
-        # Validate rate is positive
-        if rate > 0:
-            return rate
-        # Invalid rate - log warning and fall back to minimum wage
-        logging.warning(f"Invalid shift_rate {shift_rate} for shift, using minimum wage")
+    if rate:
+        return float(rate) / 100  # המרה מאגורות לשקלים
+    if pct:
+        return minimum_wage * float(pct) / 100
 
-    return minimum_wage
+    # אין תעריף ספציפי - שכר מינימום + תוספת סוג דירה
+    supplement = float(hourly_wage_supplement) / 100 if hourly_wage_supplement else 0
+    return minimum_wage + supplement
+
+
+def get_effective_hourly_rate(
+    report: dict,
+    minimum_wage: float,
+    is_shabbat: bool = False,
+    housing_rates_cache: dict = None
+) -> float:
+    """
+    קבלת תעריף שעתי אפקטיבי למשמרת.
+
+    סדר עדיפויות:
+    1. אם יש housing_rates_cache ויש רשומה מתאימה - חישוב לפי מערך דיור
+    2. אחרת - שכר מינימום + תוספת סוג דירה (אם יש)
+
+    Args:
+        report: dict עם shift_type_id, housing_array_id, is_married, hourly_wage_supplement
+        minimum_wage: שכר מינימום שעתי
+        is_shabbat: האם המשמרת בזמן שבת/חג
+        housing_rates_cache: cache של תעריפי מערכי דיור
+
+    Returns:
+        התעריף השעתי בשקלים
+    """
+    shift_type_id = report.get('shift_type_id')
+    housing_array_id = report.get('housing_array_id')
+    is_married = report.get('is_married', False)
+    hourly_wage_supplement = report.get('hourly_wage_supplement') or 0
+
+    # חיפוש בתעריפי מערכי דיור
+    if housing_rates_cache and shift_type_id and housing_array_id:
+        key = (shift_type_id, housing_array_id)
+        if key in housing_rates_cache:
+            return calculate_rate_from_housing_rates(
+                housing_rates_cache[key],
+                is_married,
+                is_shabbat,
+                minimum_wage,
+                hourly_wage_supplement
+            )
+
+    # ברירת מחדל - שכר מינימום + תוספת סוג דירה
+    supplement = float(hourly_wage_supplement) / 100 if hourly_wage_supplement else 0
+    return minimum_wage + supplement
 
 
 def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: int, minimum_wage: float = 0) -> tuple[int, int, int | None, int]:
@@ -585,9 +642,12 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
     # שליפת כל הדיווחים מהטווח שמצאנו
     cursor.execute("""
         SELECT tr.date, tr.start_time, tr.end_time, tr.shift_type_id, tr.apartment_id,
-               st.rate AS shift_rate, st.is_minimum_wage AS shift_is_minimum_wage
+               ap.housing_array_id, at.hourly_wage_supplement, p.is_married
         FROM time_reports tr
         LEFT JOIN shift_types st ON st.id = tr.shift_type_id
+        LEFT JOIN apartments ap ON ap.id = tr.apartment_id
+        LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
+        LEFT JOIN people p ON p.id = tr.person_id
         WHERE tr.person_id = %s AND tr.date >= %s AND tr.date <= %s
         ORDER BY tr.date, tr.start_time
     """, (person_id, earliest_date, last_day_date))
@@ -625,17 +685,21 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
             "end": seg["end_time"]
         })
 
-    # בניית מפת תעריפים לפי shift_id
+    # טעינת תעריפי מערכי דיור (לחודש הקודם)
+    housing_rates_cache = get_all_housing_rates_for_month(conn, prev_year, prev_month)
+
+    # בניית מפת תעריפים לפי shift_id עם תעריפי חול ושבת
     shift_rates = {}
     for r in all_reports:
         shift_id = r.get("shift_type_id")
         if shift_id and shift_id not in shift_rates:
-            if r.get("shift_is_minimum_wage"):
-                shift_rates[shift_id] = minimum_wage
-            elif r.get("shift_rate"):
-                shift_rates[shift_id] = float(r["shift_rate"])
-            else:
-                shift_rates[shift_id] = minimum_wage
+            weekday_rate = get_effective_hourly_rate(
+                r, minimum_wage, is_shabbat=False, housing_rates_cache=housing_rates_cache
+            )
+            shabbat_rate = get_effective_hourly_rate(
+                r, minimum_wage, is_shabbat=True, housing_rates_cache=housing_rates_cache
+            )
+            shift_rates[shift_id] = {"weekday": weekday_rate, "shabbat": shabbat_rate}
 
     # ארגון דיווחים לפי ימים - בסדר כרונולוגי
     reports_by_day = {}
@@ -787,11 +851,11 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
                     should_break = True
                     break_reason = "gap"
 
-            # בדיקת שינוי תעריף
+            # בדיקת שינוי תעריף - משווים תעריף חול (התעריף הבסיסי)
             if not should_break and current_chain_shift_id is not None:
-                current_rate = shift_rates.get(current_chain_shift_id, minimum_wage)
-                new_rate = shift_rates.get(evt["shift_id"], minimum_wage)
-                if current_rate != new_rate:
+                current_rates = shift_rates.get(current_chain_shift_id, {"weekday": minimum_wage})
+                new_rates = shift_rates.get(evt["shift_id"], {"weekday": minimum_wage})
+                if current_rates["weekday"] != new_rates["weekday"]:
                     should_break = True
                     break_reason = "rate_change"
 
@@ -842,10 +906,20 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
     return (chain_total_minutes, last_end_time, current_chain_shift_id, chain_night_minutes)
 
 
-def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat_cache: Dict, minimum_wage: float):
+def get_daily_segments_data(
+    conn, person_id: int, year: int, month: int, shabbat_cache: Dict, minimum_wage: float,
+    person_status_cache: Optional[Dict[int, dict]] = None,
+    apartment_type_cache: Optional[Dict[int, int]] = None,
+    housing_rates_cache: Optional[Dict] = None
+):
     """
     Calculates detailed daily segments for a given employee and month.
     Used by guide_view and simple_summary_view.
+
+    Optional cache parameters for batch optimization:
+    - person_status_cache: dict mapping person_id to status dict
+    - apartment_type_cache: dict mapping apartment_id to apartment_type_id
+    - housing_rates_cache: dict mapping (shift_type_id, housing_array_id) to rate info
     """
     start_dt, end_dt = month_range_ts(year, month)
     
@@ -860,16 +934,17 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
                st.color AS shift_color,
                st.for_friday_eve,
                st.for_shabbat_holiday,
-               st.rate AS shift_rate,
-               st.is_minimum_wage AS shift_is_minimum_wage,
                st.is_special_hourly AS shift_is_special_hourly,
                ap.name AS apartment_name,
                ap.apartment_type_id,
+               ap.housing_array_id,
+               at.hourly_wage_supplement,
                p.is_married,
                p.name as person_name
         FROM time_reports tr
         LEFT JOIN shift_types st ON st.id = tr.shift_type_id
         LEFT JOIN apartments ap ON ap.id = tr.apartment_id
+        LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
         LEFT JOIN people p ON p.id = tr.person_id
         WHERE tr.person_id = %s AND tr.date >= %s AND tr.date < %s
         ORDER BY tr.date, tr.start_time
@@ -878,20 +953,25 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
     person_name = reports[0]["person_name"] if reports else ""
 
     # Override apartment types and marital status with historical data
-    # Build apartment historical cache
+    # Use provided caches or build them (for backward compatibility)
     apartment_ids = {r["apartment_id"] for r in reports if r["apartment_id"]}
-    apartment_type_cache = {}
-    for apt_id in apartment_ids:
-        hist_type = get_apartment_type_for_month(conn, apt_id, year, month)
-        if hist_type is not None:
-            apartment_type_cache[apt_id] = hist_type
+    if apartment_type_cache is None:
+        apartment_type_cache = {}
+        for apt_id in apartment_ids:
+            hist_type = get_apartment_type_for_month(conn, apt_id, year, month)
+            if hist_type is not None:
+                apartment_type_cache[apt_id] = hist_type
 
-    # Historical marital status
-    historical_person = get_person_status_for_month(conn, person_id, year, month)
+    # Historical marital status - use cache or fetch
+    if person_status_cache is not None and person_id in person_status_cache:
+        historical_person = person_status_cache[person_id]
+    else:
+        historical_person = get_person_status_for_month(conn, person_id, year, month)
     historical_is_married = historical_person.get("is_married")
 
-    # Build shift rates historical cache
-    shift_rates_cache = get_all_shift_rates_for_month(conn, year, month)
+    # Build housing rates cache - use provided or fetch (with historical support)
+    if housing_rates_cache is None:
+        housing_rates_cache = get_all_housing_rates_for_month(conn, year, month)
 
     # Apply historical overrides to reports
     processed_reports = []
@@ -916,17 +996,7 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         # Override is_married
         if historical_is_married is not None:
             r_dict["is_married"] = historical_is_married
-            
-        # Override shift rate with historical value if available
-        # Only override if the historical rate is not None (otherwise keep current rate)
-        shift_type_id = r_dict.get("shift_type_id")
-        if shift_type_id and shift_type_id in shift_rates_cache:
-            rate_info = shift_rates_cache[shift_type_id]
-            historical_rate = rate_info.get("rate")
-            if historical_rate is not None:
-                r_dict["shift_rate"] = historical_rate
-                r_dict["shift_is_minimum_wage"] = rate_info.get("is_minimum_wage")
-            
+
         processed_reports.append(r_dict)
 
     reports = processed_reports
@@ -954,8 +1024,8 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
     for seg in shift_segments:
         segments_by_shift.setdefault(seg["shift_type_id"], []).append(seg)
     
-    # Build a map of shift_type_id -> effective hourly rate
-    # This allows using custom rates for special shifts (like cleaning)
+    # Build a map of shift_type_id -> {"weekday": rate, "shabbat": rate}
+    # This allows using custom rates for special shifts and different rates for Shabbat
     shift_rates = {}
     shift_names_map = {}  # Map shift_id -> shift_name
     shift_is_special_hourly = {}  # Map shift_id -> is_special_hourly (for variable rate tracking)
@@ -964,7 +1034,13 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
         shift_id = r.get("shift_type_id")
         if shift_id:
             if shift_id not in shift_rates:
-                shift_rates[shift_id] = get_effective_hourly_rate(r, minimum_wage)
+                weekday_rate = get_effective_hourly_rate(
+                    r, minimum_wage, is_shabbat=False, housing_rates_cache=housing_rates_cache
+                )
+                shabbat_rate = get_effective_hourly_rate(
+                    r, minimum_wage, is_shabbat=True, housing_rates_cache=housing_rates_cache
+                )
+                shift_rates[shift_id] = {"weekday": weekday_rate, "shabbat": shabbat_rate}
             if shift_id not in shift_names_map:
                 shift_names_map[shift_id] = r.get("shift_name", "")
             if shift_id not in shift_is_special_hourly:
@@ -1992,18 +2068,18 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             c_200 = result["calc200"]
             seg_detail = result.get("segments_detail", [])
 
-            # Get effective rate from first segment's shift_id (all segments in chain should have same rate)
+            # Get effective rates from first segment's shift_id (all segments in chain should have same base rate)
             first_shift_id = segments[0][3] if segments else None
-            effective_rate = shift_rates.get(first_shift_id, minimum_wage)
+            rates_dict = shift_rates.get(first_shift_id, {"weekday": minimum_wage, "shabbat": minimum_wage})
+            effective_rate = rates_dict["weekday"]  # תעריף ברירת מחדל
 
-            # משמרת ליווי בי"ח (120): בשבת הלכתית משתמשים בשכר מינימום
-            # seg_detail = [(start_min, end_min, label, is_shabbat), ...]
-            if is_hospital_escort_shift(first_shift_id) and seg_detail:
+            # חישוב תשלום לפי סגמנטים - כל סגמנט עם התעריף המתאים לו (חול/שבת)
+            if seg_detail:
                 c_pay = 0
                 for seg_start, seg_end, seg_label, is_shabbat in seg_detail:
                     seg_minutes = seg_end - seg_start
-                    # קביעת תעריף: שבת = מינימום, חול = תעריף מיוחד
-                    seg_rate = minimum_wage if is_shabbat else effective_rate
+                    # קביעת תעריף לפי שבת/חול
+                    seg_rate = rates_dict["shabbat"] if is_shabbat else rates_dict["weekday"]
                     # קביעת מכפיל לפי אחוז
                     if "200%" in seg_label:
                         multiplier = 2.0
@@ -2320,9 +2396,9 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             # בדיקה אם התעריף השתנה בין הרצף הקודם לרצף הנוכחי
             # שינוי תעריף לא שובר את הרצף לגמרי - הוא מעביר את ה-offset
             if use_carryover and prev_day_chain_shift_id is not None and first_work_shift_id is not None:
-                prev_rate = shift_rates.get(prev_day_chain_shift_id, minimum_wage)
-                first_rate = shift_rates.get(first_work_shift_id, minimum_wage)
-                if prev_rate != first_rate:
+                prev_rates = shift_rates.get(prev_day_chain_shift_id, {"weekday": minimum_wage})
+                first_rates = shift_rates.get(first_work_shift_id, {"weekday": minimum_wage})
+                if prev_rates["weekday"] != first_rates["weekday"]:
                     rate_changed_from_prev_day = True
 
         current_offset = prev_day_carryover_minutes if use_carryover else 0
@@ -2372,11 +2448,11 @@ def get_daily_segments_data(conn, person_id: int, year: int, month: int, shabbat
             # אם הסגמנט החדש הוא עם תעריף שונה מהסגמנטים הקודמים ב-chain, צריך לסגור את ה-chain
             if not is_special and current_chain_segments and not should_break:
                 new_shift_id = event.get("shift_id")
-                new_rate = shift_rates.get(new_shift_id, minimum_wage)
-                # בדיקת התעריף של ה-chain הנוכחי
+                new_rates = shift_rates.get(new_shift_id, {"weekday": minimum_wage})
+                # בדיקת התעריף של ה-chain הנוכחי - משווים תעריף חול
                 current_shift_id = current_chain_segments[0][3] if current_chain_segments else None
-                current_rate = shift_rates.get(current_shift_id, minimum_wage)
-                if new_rate != current_rate:
+                current_rates = shift_rates.get(current_shift_id, {"weekday": minimum_wage})
+                if new_rates["weekday"] != current_rates["weekday"]:
                     should_break = True
                     break_reason = "שינוי תעריף"
 
