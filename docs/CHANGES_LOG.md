@@ -2,6 +2,137 @@
 
 ---
 
+## גירסה 2.17 - 28/01/2026
+
+### ניקוי קוד - העברת ערכים hardcoded לקבועים
+
+**שינוי**: העברת ערכי זמן hardcoded לקובץ `core/constants.py` והסרת הגדרות מקומיות משוכפלות.
+
+**קבועים חדשים שנוספו**:
+- `TAGBUR_FRIDAY_PRE_ENTRY_MINUTES = 60` - שעה לפני כניסת שבת (תגבור שישי)
+- `TAGBUR_SHABBAT_POST_EXIT_MINUTES = 120` - שעתיים אחרי צאת שבת (תגבור שבת)
+
+**שינויים ב-app_utils.py**:
+- הוספת imports לקבועים: `NIGHT_SHIFT_WORK_FIRST_MINUTES`, `NIGHT_SHIFT_STANDBY_END`, `NIGHT_SHIFT_MORNING_END`, `NOON_MINUTES`, `TAGBUR_FRIDAY_PRE_ENTRY_MINUTES`, `TAGBUR_SHABBAT_POST_EXIT_MINUTES`
+- הסרת הגדרות מקומיות משוכפלות (WORK_FIRST_HOURS, STANDBY_END, MORNING_WORK_START, MORNING_WORK_END)
+- החלפת 720 ב-`NOON_MINUTES` (4 מופעים)
+- החלפת 60 ב-`TAGBUR_FRIDAY_PRE_ENTRY_MINUTES`
+- החלפת 120 ב-`TAGBUR_SHABBAT_POST_EXIT_MINUTES`
+
+**קבצים שהשתנו**: `core/constants.py`, `app_utils.py`
+
+---
+
+## גירסה 2.16 - 28/01/2026
+
+### תיקון - תעריף שבת לליווי בי"ח מגיע מטבלת shift_type_housing_rates
+
+**שינוי**: הסרת לוגיקה קבועה בקוד שהגדירה שכר מינימום למשמרת ליווי בי"ח (120) בשבת.
+
+**רקע**: בעבר הוגדר בקוד שמשמרת ליווי בי"ח בשבת תמיד מחושבת לפי שכר מינימום. עם הרחבת המערכת והוספת טבלת `shift_type_housing_rates` שמאפשרת הגדרת תעריפי שבת ספציפיים, יש לקחת את התעריף מהטבלה במקום מהקוד.
+
+**התיקון**:
+- הסרת התנאי המיוחד ל-`is_hospital_escort_shift` בחישוב `seg_rate`
+- התעריף נלקח כעת מ-`seg_rates_dict["shabbat"]` (שמגיע מטבלת `shift_type_housing_rates`)
+- הסרת import לא בשימוש: `is_hospital_escort_shift`
+
+**קבצים שהשתנו**: `app_utils.py`
+
+---
+
+## גירסה 2.15 - 28/01/2026
+
+### הוספת עמודות "מערך דיור", "סוג דירה" ו"בסיס תעריף" לדוח פירוט רצפים
+
+**שינוי**: הוספת שלוש עמודות חדשות לטבלת פירוט הרצפים בדף המדריך:
+- **מערך** - שם מערך הדיור (housing_array_name)
+- **סוג דירה** - שם סוג הדירה (apartment_type_name)
+- **בסיס** - בסיס התעריף השעתי (effective_rate) - מציג 40₪, 50₪, שכר מינימום וכו'
+
+**שינויים בקוד**:
+
+1. **app_utils.py - שאילתת SQL**:
+   - הוספת JOIN לטבלת `housing_arrays` לקבלת שם המערך
+   - הוספת `at.name AS apartment_type_name` לקבלת שם סוג הדירה
+   - הוספת `ha.name AS housing_array_name` לקבלת שם מערך הדיור
+
+2. **app_utils.py - מעבר נתונים**:
+   - הוספת `apartment_type_name` ו-`housing_array_name` ל-tuple של סגמנטים (15 שדות במקום 13)
+   - עדכון unpacking של סגמנטים בכל המקומות הרלוונטיים
+   - הוספת השדות ל-`work_segments`, `all_events`, `current_chain_segments`
+   - הוספת השדות לכל dictionaries של chains (work, standby, vacation, sick)
+   - **תיקון**: שימוש ב-`seg_rate` (התעריף הנכון לפי שבת/חול) במקום `effective_rate` (שתמיד היה תעריף חול)
+
+3. **templates/guide.html**:
+   - הוספת שלוש עמודות חדשות לכותרת הטבלה (מערך, סוג דירה, בסיס)
+   - הוספת תאים תואמים לשורות הנתונים
+   - הוספת השדות החדשים ל-`new_group` בלוגיקת האיחוד
+   - עדכון colspan של שורת הסיכום היומי מ-4 ל-7
+
+**קבצים שהשתנו**: `app_utils.py`, `templates/guide.html`
+
+---
+
+## גירסה 2.14 - 28/01/2026
+
+### תיקון באג - תעריף שגוי כשאותו shift_type_id מופיע עם housing_array_id שונים
+
+**רקע**: נמצא באג שבו תעריף השבת של משמרת 138 (שעת עבודה) חושב לפי שכר מינימום (51.60₪) במקום לפי הערך בטבלה (75₪).
+
+**הבעיה**: מילון `shift_rates` היה מאונדקס רק לפי `shift_id`. כאשר משמרת מסוימת מופיעה בדיווחים עם `housing_array_id` שונים (לדוגמה: דירה עם housing_array=1 ודירה עם housing_array=2), רק התעריף של הדירה הראשונה נשמר. דירות עם housing_array אחר קיבלו תעריף שגוי.
+
+**דוגמה**: משמרת 138 עם housing_array_id=1 יש shabbat_rate=NULL, אבל עם housing_array_id=2 יש shabbat_rate=50₪. אם הדיווח הראשון היה מדירה עם housing_array=1, גם דיווחים מדירה עם housing_array=2 קיבלו את התעריף השגוי (שכר מינימום).
+
+**התיקון**: שינוי מפתח `shift_rates` מ-`shift_id` ל-`(shift_id, housing_array_id)`:
+
+| מקום | לפני | אחרי |
+|------|------|------|
+| מפתח shift_rates | `shift_id` | `(shift_id, housing_array_id)` |
+| חיפוש תעריף | `shift_rates.get(shift_id)` | `shift_rates.get((shift_id, housing_array_id))` |
+
+**שינויים בקוד**:
+- הוספת `housing_array_id` ל-tuple של סגמנטים (10 שדות במקום 9)
+- עדכון unpacking של סגמנטים בכל המקומות
+- הוספת `housing_array_id` ל-`work_segments` ו-`all_events`
+- עדכון `_calculate_previous_month_carryover` להחזיר ולעקוב אחרי `housing_array_id`
+- תיקון `close_chain_and_record` - חישוב תשלום לכל שורה לפי התעריף הנכון:
+  - חילוץ `housing_array_id` מכל סגמנט
+  - בניית `rate_key = (shift_id, housing_array_id)` לכל סגמנט
+  - שימוש בתעריף שבת או חול לפי `is_shabbat`
+- הוספת `housing_array_id` ל-`split_segment_by_apartments`
+- הצגת תוספת סוג דירה בפירוט: אם יש `hourly_wage_supplement` בטבלת `apartment_types`, מוצג `(100% +X.XX)` במקום `(100%)`
+
+**קבצים שהשתנו**: `app_utils.py`
+
+---
+
+## גירסה 2.13 - 28/01/2026
+
+### תיקון עקביות חישוב תשלום - סכום השורות = סה"כ
+
+**רקע**: נמצאו שני פערים:
+1. פער בין תשלום שורה לבין חישוב ידני מהשעות המוצגות
+2. פער בין סכום תשלומי השורות לבין הסה"כ החודשי
+
+**הבעיות**:
+- **שורה בודדת**: שעות מוצגות 9.43, תשלום 649.01, אבל 9.43 × 2 × 34.40 = 648.78
+- **סה"כ חודשי**: סכום השורות ≠ הסה"כ (כי `round(a) + round(b) ≠ round(a+b)`)
+
+**התיקון** - כל התשלומים מחושבים משעות מעוגלות:
+
+| מקום | לפני | אחרי |
+|------|------|------|
+| תשלום סגמנט | `(minutes/60) × rate` | `round(minutes/60, 2) × rate` |
+| תשלום רצף | סכום דקות → תשלום | סכום תשלומי סגמנטים |
+| חופשה/מחלה | `(minutes/60) × rate` | `round(minutes/60, 2) × rate` |
+| סה"כ חודשי | חישוב מחדש מסך הדקות | סכום התשלומים היומיים |
+
+**תוצאה**: חישוב ידני מהשעות המוצגות = התשלום המוצג, וסכום השורות = הסה"כ
+
+**קבצים שהשתנו**: `app_utils.py`
+
+---
+
 ## גירסה 2.12 - 28/01/2026
 
 ### ניקוי קוד - הסרת לוגיקת תעריפים ישנה

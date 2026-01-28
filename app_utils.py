@@ -44,11 +44,18 @@ from core.constants import (
     # Night shift overtime thresholds
     NIGHT_REGULAR_HOURS_LIMIT,
     NIGHT_OVERTIME_125_LIMIT,
+    # Night shift time constants
+    NIGHT_SHIFT_WORK_FIRST_MINUTES,
+    NIGHT_SHIFT_STANDBY_END,
+    NIGHT_SHIFT_MORNING_END,
+    NOON_MINUTES,
+    # Tagbur time constants
+    TAGBUR_FRIDAY_PRE_ENTRY_MINUTES,
+    TAGBUR_SHABBAT_POST_EXIT_MINUTES,
     # Helper functions
     is_tagbur_shift,
     is_night_shift,
     is_shabbat_shift,
-    is_hospital_escort_shift,
     is_implicit_tagbur,
     qualifies_as_night_shift,
     calculate_night_hours_in_segment,
@@ -566,7 +573,7 @@ def get_effective_hourly_rate(
     return minimum_wage + supplement
 
 
-def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: int, minimum_wage: float = 0) -> tuple[int, int, int | None, int]:
+def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: int, minimum_wage: float = 0) -> tuple[int, int, int | None, int, int | None]:
     """
     חישוב carryover מהחודש הקודם - חיפוש איטרטיבי אחורה עד שבירת רצף.
 
@@ -574,7 +581,7 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
     עד שמוצאת יום ללא דיווחים (שבירת רצף).
 
     מחזיר את סך הדקות שנצברו ברצף האחרון, זמן הסיום שלו, shift_id של הרצף,
-    ושעות הלילה ברצף (לקביעה אם זה רצף לילה).
+    שעות הלילה ברצף, ו-housing_array_id של הרצף.
 
     חשוב: הלוגיקה זהה ללוגיקת אמצע החודש:
     - כוננות שוברת רצף רק אם אין עבודה שחופפת לה
@@ -589,8 +596,8 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
         minimum_wage: שכר מינימום לחישוב תעריפים
 
     Returns:
-        tuple של (דקות ברצף, זמן סיום הרצף בדקות מנורמלות, shift_id של הרצף האחרון, דקות לילה ברצף)
-        או (0, 0, None, 0) אם אין carryover
+        tuple של (דקות ברצף, זמן סיום, shift_id, דקות לילה, housing_array_id)
+        או (0, 0, None, 0, None) אם אין carryover
     """
     # חישוב היום האחרון של החודש הקודם
     if month == 1:
@@ -655,13 +662,13 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
 
     if not all_reports:
         cursor.close()
-        return (0, 0, None, 0)
+        return (0, 0, None, 0, None)
 
     # שליפת סגמנטים של כל סוגי המשמרות הרלוונטיים
     shift_ids = list({r["shift_type_id"] for r in all_reports if r["shift_type_id"]})
     if not shift_ids:
         cursor.close()
-        return (0, 0, None, 0)
+        return (0, 0, None, 0, None)
 
     placeholders = ",".join(["%s"] * len(shift_ids))
     cursor.execute(f"""
@@ -688,18 +695,20 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
     # טעינת תעריפי מערכי דיור (לחודש הקודם)
     housing_rates_cache = get_all_housing_rates_for_month(conn, prev_year, prev_month)
 
-    # בניית מפת תעריפים לפי shift_id עם תעריפי חול ושבת
+    # בניית מפת תעריפים לפי (shift_id, housing_array_id) עם תעריפי חול ושבת
     shift_rates = {}
     for r in all_reports:
         shift_id = r.get("shift_type_id")
-        if shift_id and shift_id not in shift_rates:
+        housing_array_id = r.get("housing_array_id")
+        rate_key = (shift_id, housing_array_id)
+        if shift_id and rate_key not in shift_rates:
             weekday_rate = get_effective_hourly_rate(
                 r, minimum_wage, is_shabbat=False, housing_rates_cache=housing_rates_cache
             )
             shabbat_rate = get_effective_hourly_rate(
                 r, minimum_wage, is_shabbat=True, housing_rates_cache=housing_rates_cache
             )
-            shift_rates[shift_id] = {"weekday": weekday_rate, "shabbat": shabbat_rate}
+            shift_rates[rate_key] = {"weekday": weekday_rate, "shabbat": shabbat_rate}
 
     # ארגון דיווחים לפי ימים - בסדר כרונולוגי
     reports_by_day = {}
@@ -736,6 +745,7 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
             report_start_str = r["start_time"]
             report_end_str = r["end_time"]
             shift_id = r["shift_type_id"]
+            housing_array_id = r.get("housing_array_id")
 
             # המרת זמני דיווח לדקות
             rs_parts = report_start_str.split(":")
@@ -794,7 +804,8 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
                             "start": overlap_start,
                             "end": overlap_end,
                             "type": seg["type"],
-                            "shift_id": shift_id
+                            "shift_id": shift_id,
+                            "housing_array_id": housing_array_id
                         }
                         all_events.append(event)
                         if seg["type"] == "work":
@@ -805,13 +816,14 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
                     "start": report_start_min,
                     "end": report_end_min,
                     "type": "work",
-                    "shift_id": shift_id
+                    "shift_id": shift_id,
+                    "housing_array_id": housing_array_id
                 }
                 all_events.append(event)
                 work_segments_all.append((report_start_min, report_end_min))
 
     if not all_events:
-        return (0, 0, None, 0)
+        return (0, 0, None, 0, None)
 
     # מיון לפי זמן התחלה
     all_events.sort(key=lambda x: x["start"])
@@ -822,6 +834,7 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
     # 3. שינוי תעריף (אבל מעביר offset)
     current_chain = []
     current_chain_shift_id = None
+    current_chain_housing_array_id = None
     last_work_end = None
     chain_total = 0  # סה"כ דקות שנצברו (כולל מ-chains קודמים שנשברו בגלל תעריף)
 
@@ -838,6 +851,7 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
                     chain_total = 0  # כוננות מאפסת לגמרי
                     current_chain = []
                     current_chain_shift_id = None
+                    current_chain_housing_array_id = None
                 last_work_end = None
         else:
             # עבודה
@@ -853,8 +867,10 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
 
             # בדיקת שינוי תעריף - משווים תעריף חול (התעריף הבסיסי)
             if not should_break and current_chain_shift_id is not None:
-                current_rates = shift_rates.get(current_chain_shift_id, {"weekday": minimum_wage})
-                new_rates = shift_rates.get(evt["shift_id"], {"weekday": minimum_wage})
+                current_rate_key = (current_chain_shift_id, current_chain_housing_array_id)
+                new_rate_key = (evt["shift_id"], evt.get("housing_array_id"))
+                current_rates = shift_rates.get(current_rate_key, {"weekday": minimum_wage})
+                new_rates = shift_rates.get(new_rate_key, {"weekday": minimum_wage})
                 if current_rates["weekday"] != new_rates["weekday"]:
                     should_break = True
                     break_reason = "rate_change"
@@ -870,14 +886,16 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
                         chain_total = 0
                     current_chain = []
                     current_chain_shift_id = None
+                    current_chain_housing_array_id = None
 
             current_chain.append((evt["start"], evt["end"]))
             current_chain_shift_id = evt["shift_id"]
+            current_chain_housing_array_id = evt.get("housing_array_id")
             last_work_end = evt["end"]
 
     # סגירת רצף אחרון
     if not current_chain:
-        return (0, 0, None, 0)
+        return (0, 0, None, 0, None)
 
     # חישוב סך הדקות ברצף האחרון + offset מרצפים קודמים
     last_chain_minutes = sum(seg[1] - seg[0] for seg in current_chain)
@@ -902,8 +920,8 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
             real_end += 1440
         chain_night_minutes += calculate_night_hours_in_segment(real_start, real_end)
 
-    # מחזיר את הדקות, זמן הסיום, shift_id של הרצף האחרון, ודקות לילה
-    return (chain_total_minutes, last_end_time, current_chain_shift_id, chain_night_minutes)
+    # מחזיר את הדקות, זמן הסיום, shift_id של הרצף האחרון, דקות לילה, ו-housing_array_id
+    return (chain_total_minutes, last_end_time, current_chain_shift_id, chain_night_minutes, current_chain_housing_array_id)
 
 
 def get_daily_segments_data(
@@ -939,12 +957,15 @@ def get_daily_segments_data(
                ap.apartment_type_id,
                ap.housing_array_id,
                at.hourly_wage_supplement,
+               at.name AS apartment_type_name,
+               ha.name AS housing_array_name,
                p.is_married,
                p.name as person_name
         FROM time_reports tr
         LEFT JOIN shift_types st ON st.id = tr.shift_type_id
         LEFT JOIN apartments ap ON ap.id = tr.apartment_id
         LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
+        LEFT JOIN housing_arrays ha ON ha.id = ap.housing_array_id
         LEFT JOIN people p ON p.id = tr.person_id
         WHERE tr.person_id = %s AND tr.date >= %s AND tr.date < %s
         ORDER BY tr.date, tr.start_time
@@ -1024,29 +1045,36 @@ def get_daily_segments_data(
     for seg in shift_segments:
         segments_by_shift.setdefault(seg["shift_type_id"], []).append(seg)
     
-    # Build a map of shift_type_id -> {"weekday": rate, "shabbat": rate}
-    # This allows using custom rates for special shifts and different rates for Shabbat
+    # Build a map of (shift_type_id, housing_array_id) -> {"weekday": rate, "shabbat": rate}
+    # This allows using custom rates for different housing arrays
     shift_rates = {}
     shift_names_map = {}  # Map shift_id -> shift_name
     shift_is_special_hourly = {}  # Map shift_id -> is_special_hourly (for variable rate tracking)
     shabbat_shifts = set()  # Track which shifts are Shabbat/holiday shifts
+    apt_type_supplement = {}  # Map apartment_type_id -> hourly_wage_supplement (in agorot)
     for r in reports:
         shift_id = r.get("shift_type_id")
+        housing_array_id = r.get("housing_array_id")
         if shift_id:
-            if shift_id not in shift_rates:
+            rate_key = (shift_id, housing_array_id)
+            if rate_key not in shift_rates:
                 weekday_rate = get_effective_hourly_rate(
                     r, minimum_wage, is_shabbat=False, housing_rates_cache=housing_rates_cache
                 )
                 shabbat_rate = get_effective_hourly_rate(
                     r, minimum_wage, is_shabbat=True, housing_rates_cache=housing_rates_cache
                 )
-                shift_rates[shift_id] = {"weekday": weekday_rate, "shabbat": shabbat_rate}
+                shift_rates[rate_key] = {"weekday": weekday_rate, "shabbat": shabbat_rate}
             if shift_id not in shift_names_map:
                 shift_names_map[shift_id] = r.get("shift_name", "")
             if shift_id not in shift_is_special_hourly:
                 shift_is_special_hourly[shift_id] = r.get("shift_is_special_hourly", False)
             if r.get("for_shabbat_holiday"):
                 shabbat_shifts.add(shift_id)
+        # מילוי תוספת סוג דירה
+        apt_type_id = r.get("apartment_type_id")
+        if apt_type_id and apt_type_id not in apt_type_supplement:
+            apt_type_supplement[apt_type_id] = r.get("hourly_wage_supplement") or 0
 
     daily_map = {}
     
@@ -1120,11 +1148,8 @@ def get_daily_segments_data(
             # יצירת סגמנטים דינמיים לפי זמן הכניסה בפועל
             entry_time = rep_start_orig  # זמן הכניסה בדקות
             exit_time = rep_end_orig if rep_end_orig > entry_time else rep_end_orig + MINUTES_PER_DAY
-
-            WORK_FIRST_HOURS = 120  # 2 שעות ראשונות = עבודה
-            STANDBY_END = 390  # 06:30 = 390 דקות
-            MORNING_WORK_START = 390  # 06:30
-            MORNING_WORK_END = 480  # 08:00
+            # קבועי זמן מיובאים מ-core/constants.py:
+            # NIGHT_SHIFT_WORK_FIRST_MINUTES, NIGHT_SHIFT_STANDBY_END, NIGHT_SHIFT_MORNING_END
 
             # מציאת ה-seg_id של כוננות לילה מהסגמנטים המוגדרים בטבלה
             night_standby_seg_id = None
@@ -1139,7 +1164,7 @@ def get_daily_segments_data(
 
             # סגמנט 1: 2 שעות ראשונות עבודה
             work1_start = entry_time
-            work1_end = min(entry_time + WORK_FIRST_HOURS, exit_time)
+            work1_end = min(entry_time + NIGHT_SHIFT_WORK_FIRST_MINUTES, exit_time)
             if work1_end > work1_start:
                 dynamic_segments.append({
                     "start_time": f"{(work1_start // 60) % 24:02d}:{work1_start % 60:02d}",
@@ -1152,9 +1177,9 @@ def get_daily_segments_data(
             # סגמנט 2: כוננות מסוף 2 שעות עבודה עד 06:30
             standby_start = work1_end
             # 06:30 - אם הכניסה אחרי חצות, 06:30 הוא באותו יום; אחרת ביום הבא
-            standby_end_time = STANDBY_END if entry_time < MINUTES_PER_DAY else STANDBY_END + MINUTES_PER_DAY
-            if entry_time >= 720:  # אם נכנס אחרי 12:00, 06:30 הוא למחרת
-                standby_end_time = STANDBY_END + MINUTES_PER_DAY
+            standby_end_time = NIGHT_SHIFT_STANDBY_END if entry_time < MINUTES_PER_DAY else NIGHT_SHIFT_STANDBY_END + MINUTES_PER_DAY
+            if entry_time >= NOON_MINUTES:  # אם נכנס אחרי 12:00, 06:30 הוא למחרת
+                standby_end_time = NIGHT_SHIFT_STANDBY_END + MINUTES_PER_DAY
             standby_end = min(standby_end_time, exit_time)
             if standby_end > standby_start:
                 dynamic_segments.append({
@@ -1167,9 +1192,9 @@ def get_daily_segments_data(
 
             # סגמנט 3: עבודה 06:30-08:00
             morning_start = standby_end_time
-            morning_end_time = MORNING_WORK_END if entry_time < MINUTES_PER_DAY else MORNING_WORK_END + MINUTES_PER_DAY
-            if entry_time >= 720:  # אם נכנס אחרי 12:00, 08:00 הוא למחרת
-                morning_end_time = MORNING_WORK_END + MINUTES_PER_DAY
+            morning_end_time = NIGHT_SHIFT_MORNING_END if entry_time < MINUTES_PER_DAY else NIGHT_SHIFT_MORNING_END + MINUTES_PER_DAY
+            if entry_time >= NOON_MINUTES:  # אם נכנס אחרי 12:00, 08:00 הוא למחרת
+                morning_end_time = NIGHT_SHIFT_MORNING_END + MINUTES_PER_DAY
             morning_end = min(morning_end_time, exit_time)
             if morning_end > morning_start and morning_start < exit_time:
                 dynamic_segments.append({
@@ -1197,7 +1222,7 @@ def get_daily_segments_data(
             if shift_type_id == TAGBUR_FRIDAY_SHIFT_ID and shabbat_enter > 0:
                 # תגבור שישי - סגמנט ראשון מתחיל שעה לפני כניסת שבת
                 # שאר הסגמנטים נשארים במקום
-                new_first_start = shabbat_enter - 60  # שעה לפני כניסת שבת
+                new_first_start = shabbat_enter - TAGBUR_FRIDAY_PRE_ENTRY_MINUTES
 
                 if seg_list:
                     first_seg = seg_list[0]
@@ -1221,7 +1246,7 @@ def get_daily_segments_data(
                 # תגבור שבת - סגמנט אחרון מסתיים שעתיים אחרי צאת שבת
                 # שאר הסגמנטים נשארים במקום
                 # צאת שבת היא ביום שבת, צריך להמיר לדקות מ-00:00 של שבת
-                new_last_end = (shabbat_exit % MINUTES_PER_DAY) + 120  # שעתיים אחרי צאת שבת
+                new_last_end = (shabbat_exit % MINUTES_PER_DAY) + TAGBUR_SHABBAT_POST_EXIT_MINUTES
 
                 if seg_list:
                     last_seg = seg_list[-1]
@@ -1298,10 +1323,13 @@ def get_daily_segments_data(
                 actual_apartment_type_id = r.get("actual_apartment_type_id")  # For visual indicator
                 is_married = r.get("is_married")
                 apartment_name = r.get("apartment_name", "")
+                apartment_type_name = r.get("apartment_type_name", "")
+                housing_array_name = r.get("housing_array_name", "")
 
                 # For fixed segment shifts (tagbur/vacation/sick), standby_defined_end = seg_end (full standby)
                 standby_defined_end = seg_end if effective_seg_type == "standby" else None
-                entry["segments"].append((seg_start, seg_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, actual_seg_date, actual_apartment_type_id, standby_defined_end))
+                housing_array_id = r.get("housing_array_id")
+                entry["segments"].append((seg_start, seg_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, actual_seg_date, actual_apartment_type_id, standby_defined_end, housing_array_id, apartment_type_name, housing_array_name))
 
             continue  # דלג על העיבוד הרגיל עבור משמרת זו
 
@@ -1382,7 +1410,7 @@ def get_daily_segments_data(
                     # in early morning (e.g. 06:30), that segment is likely NEXT DAY, not before report.
                     # This prevents treating 06:30-08:00 as the first segment for a 15:00-08:00 report.
                     is_morning_segment = seg_start_min < MORNING_CUTOFF
-                    is_afternoon_report = rep_start_min >= 720  # 12:00
+                    is_afternoon_report = rep_start_min >= NOON_MINUTES
 
                     if is_morning_segment and is_afternoon_report:
                         # Skip this morning segment - it's next day, not before the report
@@ -1409,7 +1437,7 @@ def get_daily_segments_data(
                     first_seg_start, _ = span_minutes(seg_list_sorted[0]["start_time"], seg_list_sorted[0]["end_time"])
 
                     # For afternoon reports, find first non-morning segment
-                    if rep_start_min >= 720:  # Report is in afternoon/evening
+                    if rep_start_min >= NOON_MINUTES:  # Report is in afternoon/evening
                         first_afternoon_idx = None
                         for i, seg in enumerate(seg_list_sorted):
                             seg_start_min, _ = span_minutes(seg["start_time"], seg["end_time"])
@@ -1523,12 +1551,15 @@ def get_daily_segments_data(
                     actual_apartment_type_id = r.get("actual_apartment_type_id")
                     is_married = r.get("is_married")
                     apartment_name = r.get("apartment_name", "")
+                    apartment_type_name = r.get("apartment_type_name", "")
+                    housing_array_name = r.get("housing_array_name", "")
 
                     # Store actual_date (p_date) for correct Shabbat calculation even when displayed under different day
                     # For standby segments, also store the defined end time (before min with report end)
                     # to detect early exit: if eff_end < standby_defined_end, it's early exit
                     standby_defined_end = current_seg_end if effective_seg_type == "standby" else None
-                    entry["segments"].append((eff_start, eff_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, p_date, actual_apartment_type_id, standby_defined_end))
+                    housing_array_id = r.get("housing_array_id")
+                    entry["segments"].append((eff_start, eff_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, p_date, actual_apartment_type_id, standby_defined_end, housing_array_id, apartment_type_name, housing_array_name))
                     
                 # Uncovered minutes -> work
                 # חישוב שעות עבודה שלא מכוסות ע"י סגמנטים מוגדרים
@@ -1546,6 +1577,9 @@ def get_daily_segments_data(
                     actual_apartment_type_id = r.get("actual_apartment_type_id") or apartment_type_id
                     is_married = r.get("is_married")
                     apartment_name = r.get("apartment_name", "")
+                    apartment_type_name = r.get("apartment_type_name", "")
+                    housing_array_name = r.get("housing_array_name", "")
+                    housing_array_id = r.get("housing_array_id")
 
                     for uncov_start, uncov_end in uncovered_intervals:
                         uncov_duration = uncov_end - uncov_start
@@ -1565,7 +1599,7 @@ def get_daily_segments_data(
                             eff_uncov_start, eff_uncov_end, "work", "work",
                             r["shift_type_id"], segment_id,
                             apartment_type_id, is_married,
-                            apartment_name, p_date, actual_apartment_type_id, None  # standby_defined_end=None for work
+                            apartment_name, p_date, actual_apartment_type_id, None, housing_array_id, apartment_type_name, housing_array_name
                         ))
 
     # Process Daily Segments
@@ -1577,11 +1611,12 @@ def get_daily_segments_data(
     # Track carryover minutes from previous day's chain ending
     # This is used when a work chain continues from 06:30-08:00 to 08:00-...
     # חישוב carryover מהחודש הקודם
-    prev_month_carryover_minutes, prev_month_chain_end, prev_month_chain_shift_id, prev_month_night_minutes = _calculate_previous_month_carryover(conn, person_id, year, month, minimum_wage)
+    prev_month_carryover_minutes, prev_month_chain_end, prev_month_chain_shift_id, prev_month_night_minutes, prev_month_chain_housing_array_id = _calculate_previous_month_carryover(conn, person_id, year, month, minimum_wage)
     prev_day_carryover_minutes = prev_month_carryover_minutes
     prev_day_chain_end_time = prev_month_chain_end  # זמן סיום הרצף מהחודש הקודם
     prev_day_chain_shift_id = prev_month_chain_shift_id  # shift_id של הרצף האחרון - לבדיקת שינוי תעריף
     prev_day_night_minutes = prev_month_night_minutes  # דקות לילה ברצף הקודם - לקביעת רצף לילה
+    prev_day_chain_housing_array_id = prev_month_chain_housing_array_id  # housing_array_id של הרצף האחרון
 
     # לעקוב אחרי התאריך הקודם - מאתחלים ליום האחרון של החודש הקודם
     # כדי שהבדיקה הראשונה תזהה רציפות נכונה
@@ -1657,12 +1692,12 @@ def get_daily_segments_data(
         sick_segments = []
 
         for seg_entry in raw_segments:
-            # Normalize length to 12 (now includes standby_defined_end for early exit detection)
-            if len(seg_entry) < 12:
+            # Normalize length to 15 (now includes apartment_type_name, housing_array_name)
+            if len(seg_entry) < 15:
                 # Pad with None
-                seg_entry = seg_entry + (None,) * (12 - len(seg_entry))
+                seg_entry = seg_entry + (None,) * (15 - len(seg_entry))
 
-            s_start, s_end, s_type, label, sid, seg_id, apt_type, married, apt_name, actual_date, actual_apt_type, standby_defined_end = seg_entry
+            s_start, s_end, s_type, label, sid, seg_id, apt_type, married, apt_name, actual_date, actual_apt_type, standby_defined_end, housing_array_id, apt_type_name, ha_name = seg_entry
 
             if s_type == "standby":
                 # Include shift_type_id (sid) for priority selection when merging
@@ -1673,7 +1708,7 @@ def get_daily_segments_data(
             elif s_type == "sick":
                 sick_segments.append((s_start, s_end, actual_date))
             else:
-                work_segments.append((s_start, s_end, label, sid, apt_name, actual_date, apt_type, actual_apt_type))
+                work_segments.append((s_start, s_end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, housing_array_id, apt_type_name, ha_name))
                 
         work_segments.sort(key=lambda x: x[0])
         standby_segments.sort(key=lambda x: x[0])
@@ -1848,7 +1883,7 @@ def get_daily_segments_data(
             # עיבוד סגמנטי חופשה
             for s, e, actual_date in vacation_segments:
                 duration = e - s
-                pay = (duration / 60) * minimum_wage  # חופשה = 100% שכר מינימום
+                pay = round(duration / 60, 2) * minimum_wage  # חופשה = 100% שכר מינימום (שעות מעוגלות)
                 d_calc100 += duration
                 d_payment += pay
 
@@ -1864,6 +1899,8 @@ def get_daily_segments_data(
                     "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0,
                     "type": "vacation",
                     "apartment_name": "",
+                    "apartment_type_name": "",
+                    "housing_array_name": "",
                     "shift_name": "חופשה",
                     "shift_type": "חופשה",
                     "segments": [(start_str, end_str, "חופשה")],
@@ -1881,8 +1918,8 @@ def get_daily_segments_data(
                 sick_day_num = sick_day_sequence.get(sick_date, 1)
                 sick_rate = get_sick_payment_rate(sick_day_num)
 
-                # חישוב תשלום לפי האחוז המדורג
-                pay = (duration / 60) * minimum_wage * sick_rate
+                # חישוב תשלום לפי האחוז המדורג (שעות מעוגלות)
+                pay = round(duration / 60, 2) * minimum_wage * sick_rate
                 d_calc100 += duration
                 d_payment += pay
 
@@ -1898,6 +1935,8 @@ def get_daily_segments_data(
                     "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0,
                     "type": "sick",
                     "apartment_name": "",
+                    "apartment_type_name": "",
+                    "housing_array_name": "",
                     "shift_name": "מחלה",
                     "shift_type": "מחלה",
                     "segments": [(start_str, end_str, "מחלה")],
@@ -1939,6 +1978,8 @@ def get_daily_segments_data(
                         "type": "standby",
                         "apartment_name": "",
                         "apartment_type_id": actual_apt_type,  # Use actual type for visual indicator
+                        "apartment_type_name": "",
+                        "housing_array_name": "",
                         "shift_name": "כוננות",
                         "shift_type": "כוננות",
                         "segments": [(start_str, end_str, "כוננות")],
@@ -2009,8 +2050,8 @@ def get_daily_segments_data(
 
         # Merge all events for processing - כל המשמרות כולל תגבור
         all_events = []
-        for s, e, l, sid, apt_name, actual_date, apt_type, actual_apt_type in work_segments:
-            all_events.append({"start": s, "end": e, "type": "work", "label": l, "shift_id": sid, "apartment_name": apt_name or "", "apartment_type_id": actual_apt_type, "rate_apt_type": apt_type, "actual_date": actual_date or day_date})
+        for s, e, l, sid, apt_name, actual_date, apt_type, actual_apt_type, housing_array_id, apt_type_name, ha_name in work_segments:
+            all_events.append({"start": s, "end": e, "type": "work", "label": l, "shift_id": sid, "apartment_name": apt_name or "", "apartment_type_id": actual_apt_type, "rate_apt_type": apt_type, "actual_date": actual_date or day_date, "housing_array_id": housing_array_id, "apartment_type_name": apt_type_name or "", "housing_array_name": ha_name or ""})
         for s, e, seg_id, apt, married, actual_date, _shift_type_id, actual_apt_type, _standby_defined_end in standby_segments:
             all_events.append({"start": s, "end": e, "type": "standby", "label": "כוננות", "seg_id": seg_id, "apt": apt, "actual_apt_type": actual_apt_type, "married": married, "actual_date": actual_date or day_date})
         for s, e, actual_date in vacation_segments:
@@ -2032,16 +2073,16 @@ def get_daily_segments_data(
         last_etype = None
 
         def calculate_chain_pay(segments, minutes_offset=0, carryover_night_minutes=0):
-            # segments is list of (start, end, label, shift_id, apartment_name, actual_date, apt_type, actual_apt_type, rate_apt_type)
+            # segments is list of (start, end, label, shift_id, apartment_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name)
             # Convert to format expected by _calculate_chain_wages: (start, end, shift_id, actual_date)
             # Include actual_date for each segment for correct Shabbat calculation
-            chain_segs = [(s, e, sid, adate) for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type in segments]
+            chain_segs = [(s, e, sid, adate) for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name in segments]
 
             # Calculate night hours in current chain segments
             # Times are in extended 00:00-32:00 axis (0-1920 minutes)
             # where 1440+ represents next day (00:00-08:00 after midnight)
             current_chain_night_minutes = 0
-            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type in segments:
+            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name in segments:
                 # Convert from extended 00:00-32:00 axis to 00:00-24:00 axis
                 real_start = s % 1440
                 real_end = e % 1440
@@ -2068,9 +2109,11 @@ def get_daily_segments_data(
             c_200 = result["calc200"]
             seg_detail = result.get("segments_detail", [])
 
-            # Get effective rates from first segment's shift_id (all segments in chain should have same base rate)
+            # Get effective rates from first segment's (shift_id, housing_array_id) - accounts for different housing rates
             first_shift_id = segments[0][3] if segments else None
-            rates_dict = shift_rates.get(first_shift_id, {"weekday": minimum_wage, "shabbat": minimum_wage})
+            first_housing_array_id = segments[0][9] if segments else None
+            rate_key = (first_shift_id, first_housing_array_id)
+            rates_dict = shift_rates.get(rate_key, {"weekday": minimum_wage, "shabbat": minimum_wage})
             effective_rate = rates_dict["weekday"]  # תעריף ברירת מחדל
 
             # חישוב תשלום לפי סגמנטים - כל סגמנט עם התעריף המתאים לו (חול/שבת)
@@ -2091,9 +2134,11 @@ def get_daily_segments_data(
                         multiplier = 1.25
                     else:
                         multiplier = 1.0
-                    c_pay += (seg_minutes / 60) * multiplier * seg_rate
+                    # חישוב תשלום עם שעות מעוגלות
+                    c_pay += round(seg_minutes / 60, 2) * multiplier * seg_rate
             else:
-                c_pay = (c_100/60*1.0 + c_125/60*1.25 + c_150/60*1.5 + c_175/60*1.75 + c_200/60*2.0) * effective_rate
+                # חישוב תשלום עם שעות מעוגלות
+                c_pay = (round(c_100/60, 2)*1.0 + round(c_125/60, 2)*1.25 + round(c_150/60, 2)*1.5 + round(c_175/60, 2)*1.75 + round(c_200/60, 2)*2.0) * effective_rate
 
             return c_pay, c_100, c_125, c_150, c_175, c_200, seg_detail, effective_rate
 
@@ -2107,17 +2152,19 @@ def get_daily_segments_data(
             pay, c100, c125, c150, c175, c200, seg_detail, effective_rate = calculate_chain_pay(segments, minutes_offset, carryover_night_minutes)
 
             # Calculate total chain duration (including offset from previous day)
-            chain_duration = sum(e - s for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type in segments)
+            chain_duration = sum(e - s for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name in segments)
             chain_total_minutes = minutes_offset + chain_duration
 
-            # Get apartment names and types from segments - segments is (start, end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type)
+            # Get apartment names and types from segments - segments is (start, end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name)
             chain_apartments = set()
             chain_shift_names = set()
             chain_apt_types = set()
             chain_shift_ids = set()
             chain_actual_apt_types = set()
             chain_rate_apt_types = set()
-            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type in segments:
+            chain_apt_type_names = set()
+            chain_ha_names = set()
+            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name in segments:
                 if apt:
                     chain_apartments.add(apt)
                 if apt_type:
@@ -2126,6 +2173,10 @@ def get_daily_segments_data(
                     chain_actual_apt_types.add(actual_apt_type)
                 if rate_apt_type:
                     chain_rate_apt_types.add(rate_apt_type)
+                if apt_type_name:
+                    chain_apt_type_names.add(apt_type_name)
+                if ha_name:
+                    chain_ha_names.add(ha_name)
                 if sid:
                     chain_shift_ids.add(sid)
                     shift_name = shift_names_map.get(sid, "")
@@ -2136,6 +2187,8 @@ def get_daily_segments_data(
             chain_apt_type = list(chain_apt_types)[0] if chain_apt_types else None
             chain_actual_apt = list(chain_actual_apt_types)[0] if chain_actual_apt_types else None
             chain_rate_apt = list(chain_rate_apt_types)[0] if chain_rate_apt_types else None
+            chain_apt_type_name = list(chain_apt_type_names)[0] if chain_apt_type_names else ""
+            chain_ha_name = list(chain_ha_names)[0] if chain_ha_names else ""
             chain_shift_id = list(chain_shift_ids)[0] if chain_shift_ids else None
             # שם המשמרת הספציפי של ה-chain (לא כל המשמרות של היום)
             shift_name_str = shift_names_map.get(chain_shift_id, "") if chain_shift_id else ""
@@ -2152,7 +2205,7 @@ def get_daily_segments_data(
                 # מיון הסגמנטים המקוריים לפי זמן התחלה
                 sorted_segs = sorted(segs, key=lambda x: x[0])
 
-                for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type in sorted_segs:
+                for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name in sorted_segs:
                     # בדיקה אם יש חפיפה עם הטווח הנוכחי
                     if s < seg_end and e > current_start:
                         # זמן התחלה של החפיפה
@@ -2170,7 +2223,10 @@ def get_daily_segments_data(
                                 "apt_type": apt_type,
                                 "actual_apt_type": actual_apt_type,
                                 "rate_apt_type": rate_apt_type,
-                                "shift_id": sid
+                                "shift_id": sid,
+                                "housing_array_id": ha_id,
+                                "apt_type_name": apt_type_name,
+                                "ha_name": ha_name
                             })
                             current_start = overlap_end
 
@@ -2180,7 +2236,7 @@ def get_daily_segments_data(
                 # אם לא נמצאו חפיפות, החזר סגמנט בודד עם ברירת מחדל
                 if not result_segments:
                     if segs:
-                        s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type = segs[0]
+                        s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name = segs[0]
                         result_segments.append({
                             "start": seg_start,
                             "end": seg_end,
@@ -2190,7 +2246,10 @@ def get_daily_segments_data(
                             "apt_type": apt_type,
                             "actual_apt_type": actual_apt_type,
                             "rate_apt_type": rate_apt_type,
-                            "shift_id": sid
+                            "shift_id": sid,
+                            "housing_array_id": ha_id,
+                            "apt_type_name": apt_type_name,
+                            "ha_name": ha_name
                         })
                     else:
                         result_segments.append({
@@ -2202,7 +2261,10 @@ def get_daily_segments_data(
                             "apt_type": None,
                             "actual_apt_type": None,
                             "rate_apt_type": None,
-                            "shift_id": None
+                            "shift_id": None,
+                            "housing_array_id": None,
+                            "apt_type_name": "",
+                            "ha_name": ""
                         })
 
                 return result_segments
@@ -2232,6 +2294,9 @@ def get_daily_segments_data(
                 seg_actual_apt = sub_seg["actual_apt_type"]
                 seg_rate_apt = sub_seg["rate_apt_type"]
                 seg_shift_id = sub_seg["shift_id"]
+                seg_housing_array_id = sub_seg.get("housing_array_id")
+                seg_apt_type_name = sub_seg.get("apt_type_name", "")
+                seg_ha_name = sub_seg.get("ha_name", "")
 
                 seg_duration = seg_end - seg_start
 
@@ -2254,9 +2319,20 @@ def get_daily_segments_data(
                 elif "200%" in seg_label:
                     seg_c200 = seg_duration
 
-                # משמרת ליווי בי"ח (120): בשבת הלכתית משתמשים בשכר מינימום
-                seg_rate = minimum_wage if (is_hospital_escort_shift(seg_shift_id) and is_shabbat) else effective_rate
-                seg_pay = (seg_c100/60*1.0 + seg_c125/60*1.25 + seg_c150/60*1.5 + seg_c175/60*1.75 + seg_c200/60*2.0) * seg_rate
+                # קבלת תעריף לפי (shift_id, housing_array_id) של הסגמנט הספציפי
+                seg_rate_key = (seg_shift_id, seg_housing_array_id)
+                seg_rates_dict = shift_rates.get(seg_rate_key, {"weekday": minimum_wage, "shabbat": minimum_wage})
+                # בחירת תעריף שבת או חול לפי is_shabbat (מטבלת shift_type_housing_rates)
+                seg_rate = seg_rates_dict["shabbat"] if is_shabbat else seg_rates_dict["weekday"]
+
+                # הוספת תוספת סוג דירה לתווית אם קיימת (מטבלת apartment_types)
+                hourly_supplement = apt_type_supplement.get(seg_actual_apt, 0)
+                if hourly_supplement:
+                    # התוספת באגורות - ממירים לשקלים
+                    seg_label = f"{seg_label} +{hourly_supplement / 100:.2f}"
+
+                # חישוב תשלום עם שעות מעוגלות (כדי שהתשלום יתאים לשעות המוצגות)
+                seg_pay = (round(seg_c100/60, 2)*1.0 + round(seg_c125/60, 2)*1.25 + round(seg_c150/60, 2)*1.5 + round(seg_c175/60, 2)*1.75 + round(seg_c200/60, 2)*2.0) * seg_rate
 
                 start_str = f"{seg_start // 60 % 24:02d}:{seg_start % 60:02d}"
                 end_str = f"{seg_end // 60 % 24:02d}:{seg_end % 60:02d}"
@@ -2288,6 +2364,8 @@ def get_daily_segments_data(
                 # השתמש בדירה הספציפית של הסגמנט, לא של הרצף כולו
                 display_apt_name = seg_apt_name if seg_apt_name else apt_name
                 display_apt_type = seg_apt_type if seg_apt_type is not None else chain_apt_type
+                display_apt_type_name = seg_apt_type_name if seg_apt_type_name else chain_apt_type_name
+                display_ha_name = seg_ha_name if seg_ha_name else chain_ha_name
 
                 # קביעת סיבת מעבר שורה (אם לא השורה הראשונה)
                 # מציג את הסיבה בשורה הנוכחית (למה התחלנו שורה חדשה)
@@ -2333,6 +2411,8 @@ def get_daily_segments_data(
                     "type": "work",
                     "apartment_name": display_apt_name,
                     "apartment_type_id": display_apt_type,
+                    "apartment_type_name": display_apt_type_name,
+                    "housing_array_name": display_ha_name,
                     "shift_name": seg_shift_name,
                     "shift_type": shift_type_label,
                     "shift_id": current_shift_id,  # For identifying special shifts like medical escort
@@ -2340,7 +2420,7 @@ def get_daily_segments_data(
                     "segments": [(start_str, end_str, seg_label)],
                     "break_reason": final_reason,
                     "from_prev_day": (seg_start >= MINUTES_PER_DAY) if is_first else False,
-                    "effective_rate": effective_rate,
+                    "effective_rate": seg_rate,  # שימוש בתעריף הנכון (שבת או חול) לפי is_shabbat
                 })
 
             # Check if chain ends at 08:00 boundary (1920 = 08:00 + 1440)
@@ -2350,7 +2430,7 @@ def get_daily_segments_data(
             # Calculate night minutes in this chain (for carryover to next day)
             # Times are in extended 00:00-32:00 axis (0-1920 minutes)
             chain_night_minutes = 0
-            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type in segments:
+            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name in segments:
                 # Convert from extended 00:00-32:00 axis to 00:00-24:00 axis
                 real_start = s % 1440
                 real_end = e % 1440
@@ -2367,10 +2447,12 @@ def get_daily_segments_data(
         # Carryover applies if the gap between previous chain end and first work start is <= 60 minutes
         first_work_start = None
         first_work_shift_id = None
+        first_work_housing_array_id = None
         for evt in all_events:
             if evt["type"] == "work":
                 first_work_start = evt["start"]
                 first_work_shift_id = evt.get("shift_id")
+                first_work_housing_array_id = evt.get("housing_array_id")
                 break
 
         use_carryover = False
@@ -2396,8 +2478,10 @@ def get_daily_segments_data(
             # בדיקה אם התעריף השתנה בין הרצף הקודם לרצף הנוכחי
             # שינוי תעריף לא שובר את הרצף לגמרי - הוא מעביר את ה-offset
             if use_carryover and prev_day_chain_shift_id is not None and first_work_shift_id is not None:
-                prev_rates = shift_rates.get(prev_day_chain_shift_id, {"weekday": minimum_wage})
-                first_rates = shift_rates.get(first_work_shift_id, {"weekday": minimum_wage})
+                prev_rate_key = (prev_day_chain_shift_id, prev_day_chain_housing_array_id)
+                first_rate_key = (first_work_shift_id, first_work_housing_array_id)
+                prev_rates = shift_rates.get(prev_rate_key, {"weekday": minimum_wage})
+                first_rates = shift_rates.get(first_rate_key, {"weekday": minimum_wage})
                 if prev_rates["weekday"] != first_rates["weekday"]:
                     rate_changed_from_prev_day = True
 
@@ -2409,6 +2493,8 @@ def get_daily_segments_data(
         last_chain_ended_at_0800 = False
         last_chain_total = 0
         last_chain_night_minutes = 0  # Track night minutes for carryover to next day
+        last_chain_shift_id = None
+        last_chain_housing_array_id = None
 
         # Re-process chains with proper carryover
         # We need to re-process since the first chain might need offset
@@ -2448,10 +2534,14 @@ def get_daily_segments_data(
             # אם הסגמנט החדש הוא עם תעריף שונה מהסגמנטים הקודמים ב-chain, צריך לסגור את ה-chain
             if not is_special and current_chain_segments and not should_break:
                 new_shift_id = event.get("shift_id")
-                new_rates = shift_rates.get(new_shift_id, {"weekday": minimum_wage})
+                new_housing_array_id = event.get("housing_array_id")
+                new_rate_key = (new_shift_id, new_housing_array_id)
+                new_rates = shift_rates.get(new_rate_key, {"weekday": minimum_wage})
                 # בדיקת התעריף של ה-chain הנוכחי - משווים תעריף חול
                 current_shift_id = current_chain_segments[0][3] if current_chain_segments else None
-                current_rates = shift_rates.get(current_shift_id, {"weekday": minimum_wage})
+                current_housing_array_id = current_chain_segments[0][9] if current_chain_segments else None
+                current_rate_key = (current_shift_id, current_housing_array_id)
+                current_rates = shift_rates.get(current_rate_key, {"weekday": minimum_wage})
                 if new_rates["weekday"] != current_rates["weekday"]:
                     should_break = True
                     break_reason = "שינוי תעריף"
@@ -2468,6 +2558,8 @@ def get_daily_segments_data(
                 last_chain_total = chain_total
                 last_chain_ended_at_0800 = ends_at_0800
                 last_chain_night_minutes = chain_night
+                last_chain_shift_id = current_chain_segments[0][3] if current_chain_segments else None
+                last_chain_housing_array_id = current_chain_segments[0][9] if current_chain_segments else None
 
                 # אם נשבר בגלל שינוי תעריף, צריך להעביר את ה-minutes offset ל-chain הבא
                 # כי ה-overtime נמשך על פני כל יום העבודה
@@ -2506,6 +2598,8 @@ def get_daily_segments_data(
                         "type": "standby",
                         "apartment_name": event.get("apartment_name", ""),
                         "apartment_type_id": event.get("actual_apt_type"),  # Use actual type for visual indicator
+                        "apartment_type_name": "",
+                        "housing_array_name": "",
                         "shift_name": "כוננות",
                         "shift_type": "כוננות",
                         "segments": [],
@@ -2515,7 +2609,7 @@ def get_daily_segments_data(
                     })
                 elif etype == "vacation" or etype == "sick":
                     duration = end - start
-                    hrs = duration / 60
+                    hrs = round(duration / 60, 2)  # שעות מעוגלות
                     pay = hrs * minimum_wage
                     d_payment += pay
                     d_calc100 += duration  # מחלה/חופשה = 100%
@@ -2530,6 +2624,8 @@ def get_daily_segments_data(
                         "type": etype,  # "vacation" או "sick"
                         "apartment_name": "",
                         "apartment_type_id": None,
+                        "apartment_type_name": "",
+                        "housing_array_name": "",
                         "shift_name": label,
                         "shift_type": label,
                         "segments": [(f"{start // 60 % 24:02d}:{start % 60:02d}", f"{end // 60 % 24:02d}:{end % 60:02d}", label)],
@@ -2541,9 +2637,9 @@ def get_daily_segments_data(
                 last_end = end
                 last_etype = etype
             else:
-                # segments: (start, end, label, shift_id, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type)
+                # segments: (start, end, label, shift_id, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name)
                 # apt_type = rate_apt_type (לחישוב), actual_apt_type = apartment_type_id (להצגה)
-                current_chain_segments.append((start, end, event["label"], event["shift_id"], event.get("apartment_name", ""), event.get("actual_date"), event.get("rate_apt_type"), event.get("apartment_type_id"), event.get("rate_apt_type")))
+                current_chain_segments.append((start, end, event["label"], event["shift_id"], event.get("apartment_name", ""), event.get("actual_date"), event.get("rate_apt_type"), event.get("apartment_type_id"), event.get("rate_apt_type"), event.get("housing_array_id"), event.get("apartment_type_name", ""), event.get("housing_array_name", "")))
                 last_end = end
                 last_etype = etype
 
@@ -2560,6 +2656,8 @@ def get_daily_segments_data(
             last_chain_total = chain_total
             last_chain_ended_at_0800 = ends_at_0800
             last_chain_night_minutes = chain_night
+            last_chain_shift_id = current_chain_segments[0][3] if current_chain_segments else None
+            last_chain_housing_array_id = current_chain_segments[0][9] if current_chain_segments else None
 
         # Update carryover for next day
         # If the last chain ended at 08:00 (1920 normalized), save its total for next day
@@ -2567,10 +2665,14 @@ def get_daily_segments_data(
             prev_day_carryover_minutes = last_chain_total
             prev_day_chain_end_time = 1920  # 08:00 normalized
             prev_day_night_minutes = last_chain_night_minutes  # Night minutes for next day's chain
+            prev_day_chain_shift_id = last_chain_shift_id
+            prev_day_chain_housing_array_id = last_chain_housing_array_id
         else:
             prev_day_carryover_minutes = 0
             prev_day_chain_end_time = 0
             prev_day_night_minutes = 0
+            prev_day_chain_shift_id = None
+            prev_day_chain_housing_array_id = None
             
         # Calculate total_minutes
         total_minutes = sum(w[1]-w[0] for w in work_segments)
@@ -2883,8 +2985,8 @@ def aggregate_daily_segments_to_monthly(
     # ימי חופשה שנוצלו
     monthly_totals["vacation_days_taken"] = len(vacation_days_set)
 
-    # תשלום חופשה
-    monthly_totals["vacation_payment"] = (monthly_totals["vacation_minutes"] / 60) * minimum_wage
+    # תשלום חופשה (שעות מעוגלות)
+    monthly_totals["vacation_payment"] = round(monthly_totals["vacation_minutes"] / 60, 2) * minimum_wage
     monthly_totals["vacation"] = monthly_totals["vacation_minutes"]
 
     # ימי מחלה שנוצלו (התשלום כבר חושב בלולאה עם האחוזים המדורגים)
@@ -2962,47 +3064,19 @@ def aggregate_daily_segments_to_monthly(
     # שמירת שכר אפקטיבי
     monthly_totals["effective_hourly_rate"] = minimum_wage
 
-    # חישוב סה"כ מעוגל - שעות מעוגלות × תעריף = סכום
-    # זה מבטיח שסכום השורות = סה"כ לתשלום
-    rounded_total = 0.0
-
-    # calc100: שעות מעוגלות × תעריף
-    calc100_hours = round(monthly_totals["calc100"] / 60, 2)
-    rounded_total += calc100_hours * minimum_wage
-
-    # calc125: שעות מעוגלות × תעריף × 1.25
-    calc125_hours = round(monthly_totals["calc125"] / 60, 2)
-    rounded_total += calc125_hours * minimum_wage * 1.25
-
-    # calc150_overtime: שעות מעוגלות × תעריף × 1.5
-    calc150_overtime_hours = round(monthly_totals.get("calc150_overtime", 0) / 60, 2)
-    rounded_total += calc150_overtime_hours * minimum_wage * 1.5
-
-    # calc150_shabbat: שעות מעוגלות × תעריף × 1.5
-    calc150_shabbat_hours = round(monthly_totals.get("calc150_shabbat", 0) / 60, 2)
-    rounded_total += calc150_shabbat_hours * minimum_wage * 1.5
-
-    # calc175: שעות מעוגלות × תעריף × 1.75
-    calc175_hours = round(monthly_totals["calc175"] / 60, 2)
-    rounded_total += calc175_hours * minimum_wage * 1.75
-
-    # calc200: שעות מעוגלות × תעריף × 2.0
-    calc200_hours = round(monthly_totals["calc200"] / 60, 2)
-    rounded_total += calc200_hours * minimum_wage * 2.0
-
-    # calc_variable: שעות מעוגלות × תעריף אפקטיבי מעוגל
-    calc_variable_hours = round(monthly_totals["calc_variable"] / 60, 2)
-    if calc_variable_hours > 0:
-        effective_var_rate = round(monthly_totals["payment_calc_variable"] / calc_variable_hours, 2)
-        rounded_total += calc_variable_hours * effective_var_rate
-
-    # סכומים ישירים (לא צריכים עיגול של שעות)
-    rounded_total += monthly_totals["vacation_payment"]
-    rounded_total += monthly_totals["sick_payment"]
-    rounded_total += monthly_totals["standby_payment"]
-    rounded_total += monthly_totals["travel"]
-    rounded_total += monthly_totals["extras"]
+    # חישוב סה"כ מעוגל - סכום כל התשלומים היומיים (שכבר מחושבים עם שעות מעוגלות)
+    # payment = עבודה + חופשה + מחלה (כולל בונוסים)
+    # standby_payment = כוננויות
+    # travel + extras = נסיעות ותוספות
+    rounded_total = (
+        monthly_totals["payment"] +
+        monthly_totals["standby_payment"] +
+        monthly_totals["travel"] +
+        monthly_totals["extras"]
+    )
 
     monthly_totals["rounded_total"] = round(rounded_total, 2)
+    # total_payment = rounded_total לעקביות בכל המערכת
+    monthly_totals["total_payment"] = monthly_totals["rounded_total"]
 
     return monthly_totals

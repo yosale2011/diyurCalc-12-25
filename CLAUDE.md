@@ -12,14 +12,6 @@
 - [.claude/skills/changelog.md](.claude/skills/changelog.md) - תיעוד שינויים עם מספר גרסה
 - [.claude/skills/test.md](.claude/skills/test.md) - הרצת בדיקות
 
-## למידת הפרויקט
-
-**להבנת מבנה הפרויקט והקוד:**
-- [.claude/skills/learn-project.md](.claude/skills/learn-project.md) - קרא קבצים בפועל כדי להבין את המצב הנוכחי
-
-**תיעוד נוסף:**
-- [docs/LOGIC.md](docs/LOGIC.md) - תיעוד מפורט של הלוגיקה העסקית
-- [PROJECT_DOCUMENTATION.md](PROJECT_DOCUMENTATION.md) - תיעוד כללי
 
 ## כללי קוד בסיסיים
 

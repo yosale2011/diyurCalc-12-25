@@ -24,6 +24,10 @@ NIGHT_SHIFT_ID = 107            # משמרת לילה
 TAGBUR_FRIDAY_SHIFT_ID = 108    # משמרת תגבור שישי/ערב חג
 TAGBUR_SHABBAT_SHIFT_ID = 109   # משמרת תגבור שבת/חג
 
+# Tagbur time boundaries (in minutes)
+TAGBUR_FRIDAY_PRE_ENTRY_MINUTES = 60    # שעה לפני כניסת שבת
+TAGBUR_SHABBAT_POST_EXIT_MINUTES = 120  # שעתיים אחרי צאת שבת
+
 # Special shifts
 HOSPITAL_ESCORT_SHIFT_ID = 120  # משמרת ליווי בי"ח
 MEDICAL_ESCORT_SHIFT_ID = 148   # משמרת ליווי רפואי
