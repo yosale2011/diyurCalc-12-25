@@ -51,7 +51,8 @@
       "Bash(pytest:*)",
       "Bash(where:*)",
       "Bash(git restore:*)",
-      "Bash(git stash show:*)"
+      "Bash(git stash show:*)",
+      "Bash(git push)"
     ],
     "deny": [],
     "ask": []

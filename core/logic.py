@@ -50,17 +50,28 @@ def get_active_guides() -> List[Dict[str, Any]]:
 
 
 def get_available_months_for_person(conn, person_id: int) -> List[Tuple[int, int]]:
-    """Fetch distinct months for a specific person efficiently using SQL."""
+    """Fetch distinct months for a specific person efficiently using SQL.
+
+    כולל חודשים עם משמרות (time_reports) או רכיבי תשלום (payment_components).
+    """
     cursor = conn.cursor()
     try:
         cursor.execute("""
-            SELECT DISTINCT
-                CAST(EXTRACT(YEAR FROM date) AS INTEGER) as year,
-                CAST(EXTRACT(MONTH FROM date) AS INTEGER) as month
-            FROM time_reports
-            WHERE person_id = %s
+            SELECT DISTINCT year, month FROM (
+                SELECT
+                    CAST(EXTRACT(YEAR FROM date) AS INTEGER) as year,
+                    CAST(EXTRACT(MONTH FROM date) AS INTEGER) as month
+                FROM time_reports
+                WHERE person_id = %s
+                UNION
+                SELECT
+                    CAST(EXTRACT(YEAR FROM date) AS INTEGER) as year,
+                    CAST(EXTRACT(MONTH FROM date) AS INTEGER) as month
+                FROM payment_components
+                WHERE person_id = %s
+            ) combined
             ORDER BY year DESC, month DESC
-        """, (person_id,))
+        """, (person_id, person_id))
         rows = cursor.fetchall()
         return [(r[0], r[1]) for r in rows]
     except Exception as e:

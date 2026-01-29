@@ -53,6 +53,7 @@ def home(
     years_options = sorted({y for y, _ in months_all}, reverse=True)
 
     counts: dict[int, int] = {}
+    has_payment_components: set[int] = set()
     if selected_year and selected_month:
         start_dt, end_dt = month_range_ts(selected_year, selected_month)
         # Convert datetime to date for PostgreSQL date column
@@ -70,6 +71,16 @@ def home(
                 (start_date, end_date),
             ):
                 counts[row["person_id"]] = row["cnt"]
+            # גם מדריכים עם רכיבי תשלום צריכים להופיע
+            for row in conn.execute(
+                """
+                SELECT DISTINCT person_id
+                FROM payment_components
+                WHERE date >= %s AND date < %s
+                """,
+                (start_date, end_date),
+            ):
+                has_payment_components.add(row["person_id"])
         logger.info(f"Counts query took: {time.time() - counts_start:.4f}s")
 
     # Calculate seniority years for each guide
@@ -87,8 +98,8 @@ def home(
             continue
 
         if selected_year and selected_month:
-            # Show guides with at least 1 shift (changed from > 1 to >= 1)
-            if counts.get(g["id"], 0) < 1:
+            # הצג מדריכים עם לפחות משמרת אחת או רכיבי תשלום בחודש
+            if counts.get(g["id"], 0) < 1 and g["id"] not in has_payment_components:
                 continue
 
         # Calculate seniority years

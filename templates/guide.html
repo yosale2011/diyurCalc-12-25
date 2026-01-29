@@ -898,7 +898,7 @@
         </div>
 
         <!-- סיכום חודשי -->
-        {% if daily_segments %}
+        {% if daily_segments or (monthly_totals.total_payment or 0) > 0 %}
         <div style="margin-top: 16px; page-break-before: auto;">
           <div class="day-header"
             style="margin-bottom: 4px; font-size: 13pt; color: #000; font-weight: bold; border-bottom: 2px solid #000;">
@@ -1157,7 +1157,7 @@
           <div style="font-size: 16px; font-weight: bold; color: #1f6feb;">סה"כ לתשלום (עבודה בלבד): {{
             (monthly_totals.payment or 0) | format_currency }} ₪</div>
         </div>
-        {% if daily_segments %}
+        {% if daily_segments or (monthly_totals.total_payment or 0) > 0 %}
         <table>
           <thead>
             <tr>
@@ -1228,7 +1228,7 @@
           </a>
         </div>
 
-        {% if daily_segments %}
+        {% if daily_segments or (monthly_totals.total_payment or 0) > 0 %}
         {% set hourly_rate = minimum_wage %}
         <!-- DEBUG: minimum_wage={{ minimum_wage }}, hourly_rate={{ hourly_rate }} -->
 
