@@ -470,11 +470,11 @@
     <input type="radio" id="tab-merav" name="tabset">
     <label for="tab-merav">ייצוא שכר</label>
     <input type="radio" id="tab-simple" name="tabset">
-    <label for="tab-simple">חישוב ישן</label>
+    <label for="tab-simple">סיכום פשוט</label>
 
     <div class="tab-panels">
       <section class="panel panel-simple">
-        <h2 style="margin: 0 0 20px; font-size: 20px;">סיכום לפי חישוב ישן</h2>
+        <h2 style="margin: 0 0 20px; font-size: 20px;">סיכום לפי סוג משמרת</h2>
         {% set standby_per = simple_summary.standby.payment_per if simple_summary.standby.count > 0 else 0 %}
         <table style="width: 100%; max-width: 700px; font-size: 1.1em;">
           <thead>
@@ -581,9 +581,9 @@
         </table>
 
         <div style="margin-top: 20px; font-size: 0.9em; color: #666;">
-          * החישוב מציג סיכום לפי סוג המשמרת (חול, שישי, שבת, לילה, שעות מעבר).<br>
-          * מחיר למשמרת נלקח מהתשלום הכולל בדוח לפי סוג המשמרת.<br>
-          * מחיר כולל כוננות מוסיף את תשלום הכוננות הממוצע למשמרת.
+          * סיכום לפי סוג המשמרת (חול, שישי, שבת, לילה, שעות מעבר).<br>
+          * מחיר למשמרת = תשלום יומי ממוצע לפי סוג.<br>
+          * מחיר כולל כוננות = כולל תשלום כוננות ממוצע.
         </div>
       </section>
       <section class="panel panel-shifts">

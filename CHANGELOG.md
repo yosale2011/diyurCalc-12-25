@@ -6,6 +6,32 @@
 
 ---
 
+## [2.0.20] - 2026-01-29
+
+### שינויים
+- תיקון באג: שגיאת "Internal Server Error" בדף סיכום חודשי
+- הוספת שדות חסרים (`housing_array_id`, `apt_type_name`, `ha_name`) לטופל `early_exit_work_segments`
+- קבצים: `app_utils.py`
+
+### סיבה
+כוננויות חלקיות שהומרו לשעות עבודה (יציאה מוקדמת) יצרו טופל עם 8 ערכים במקום 11 הנדרשים, מה שגרם לשגיאת `ValueError: not enough values to unpack`
+
+---
+
+## [2.0.19] - 2026-01-29
+
+### שינויים
+- הסרת שדה `wage_percent` מטבלת `shift_time_segments` - קוד מת שלא היה בשימוש
+- תיקון טאב "סיכום פשוט" - עכשיו מחושב נכון מ-daily_segments (כמו שאר הטאבים)
+- הסרת `buckets` מחישוב daily_segments - לא הוצג בשום מקום
+- קבצים: `app_utils.py`, `routes/admin.py`, `routes/guide.py`, `core/history.py`, `templates/guide.html`
+- מיגרציית DB: `sql/drop_wage_percent_column.sql`
+
+### סיבה
+השדה `wage_percent` בטבלת `shift_time_segments` לא היה בשימוש בפועל - אחוזי השכר מחושבים תמיד לפי כללי שעות נוספות (8 שעות ראשונות 100%, עד 10 שעות 125%, מעל 150%, ובשבת +50%). הטאב "סיכום פשוט" (לשעבר "חישוב ישן") השתמש בחישוב שגוי - תוקן להשתמש בנתונים הנכונים מ-daily_segments.
+
+---
+
 ## [2.0.18] - 2026-01-29
 
 ### שינויים

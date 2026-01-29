@@ -1122,11 +1122,9 @@ def get_daily_segments_data(
         seg_list = segments_by_shift.get(r["shift_type_id"], [])
         if not seg_list:
             # אין סגמנטים מוגדרים - יצירת סגמנט דינמי
-            # wage_percent=None מסמן שהאחוז יחושב לפי מנגנון הרצפים/שבת
             seg_list = [{
                 "start_time": r["start_time"],
                 "end_time": r["end_time"],
-                "wage_percent": None,  # יחושב דינמית לפי שעות שבת
                 "segment_type": "work",
                 "id": None
             }]
@@ -1169,7 +1167,6 @@ def get_daily_segments_data(
                 dynamic_segments.append({
                     "start_time": f"{(work1_start // 60) % 24:02d}:{work1_start % 60:02d}",
                     "end_time": f"{(work1_end // 60) % 24:02d}:{work1_end % 60:02d}",
-                    "wage_percent": 100,
                     "segment_type": "work",
                     "id": None
                 })
@@ -1185,7 +1182,6 @@ def get_daily_segments_data(
                 dynamic_segments.append({
                     "start_time": f"{(standby_start // 60) % 24:02d}:{standby_start % 60:02d}",
                     "end_time": f"{(standby_end // 60) % 24:02d}:{standby_end % 60:02d}",
-                    "wage_percent": 24,
                     "segment_type": "standby",
                     "id": night_standby_seg_id
                 })
@@ -1200,7 +1196,6 @@ def get_daily_segments_data(
                 dynamic_segments.append({
                     "start_time": f"{(morning_start // 60) % 24:02d}:{morning_start % 60:02d}",
                     "end_time": f"{(morning_end // 60) % 24:02d}:{morning_end % 60:02d}",
-                    "wage_percent": 100,
                     "segment_type": "work",
                     "id": None
                 })
@@ -1264,7 +1259,7 @@ def get_daily_segments_data(
             CUTOFF = 480  # 08:00
             display_date = r_date  # יום הדיווח
             day_key = display_date.strftime("%d/%m/%Y")
-            entry = daily_map.setdefault(day_key, {"buckets": {}, "shifts": set(), "segments": [], "is_fixed_segments": False, "escort_bonus_minutes": 0, "day_shift_types": set()})
+            entry = daily_map.setdefault(day_key, {"shifts": set(), "segments": [], "is_fixed_segments": False, "escort_bonus_minutes": 0, "day_shift_types": set()})
             entry["is_fixed_segments"] = True  # סימון שזו משמרת קבועה
             entry["day_shift_types"].add(r["shift_type_id"])  # Track shift types for Shabbat detection
             if r["shift_name"]:
@@ -1276,7 +1271,6 @@ def get_daily_segments_data(
 
             for seg in seg_list:
                 seg_start, seg_end = span_minutes(seg["start_time"], seg["end_time"])
-                duration = seg_end - seg_start
 
                 # זיהוי מעבר יום: אם זמן ההתחלה קטן מזמן הסיום של הסגמנט הקודם
                 # זה אומר שעברנו חצות והסגמנט הזה הוא ביום הבא
@@ -1295,28 +1289,15 @@ def get_daily_segments_data(
                 else:
                     effective_seg_type = seg["segment_type"]
 
-                # קביעת תווית
+                # קביעת תווית לפי סוג הסגמנט
                 if effective_seg_type == "standby":
                     label = "כוננות"
                 elif effective_seg_type == "vacation":
                     label = "חופשה"
                 elif effective_seg_type == "sick":
                     label = "מחלה"
-                elif seg["wage_percent"] == 100:
-                    label = "100%"
-                elif seg["wage_percent"] == 125:
-                    label = "125%"
-                elif seg["wage_percent"] == 150:
-                    label = "150%"
-                elif seg["wage_percent"] == 175:
-                    label = "175%"
-                elif seg["wage_percent"] == 200:
-                    label = "200%"
                 else:
-                    label = f"{seg['wage_percent']}%"
-
-                entry["buckets"].setdefault(label, 0)
-                entry["buckets"][label] += duration
+                    label = "work"
 
                 segment_id = seg.get("id")
                 apartment_type_id = r.get("apartment_type_id")  # For rate calculation
@@ -1368,7 +1349,6 @@ def get_daily_segments_data(
                 day_key = display_date.strftime("%d/%m/%Y")
                 if day_key not in daily_map:
                     daily_map[day_key] = {
-                        "buckets": {},
                         "shifts": set(),
                         "segments": [],
                         "is_fixed_segments": False,
@@ -1508,32 +1488,17 @@ def get_daily_segments_data(
                          effective_seg_type = "vacation"
                     else:
                          effective_seg_type = seg["segment_type"]
-                    
+
+                    # קביעת תווית לפי סוג הסגמנט
                     if effective_seg_type == "standby":
                         label = "כוננות"
                     elif effective_seg_type == "vacation":
                         label = "חופשה"
                     elif effective_seg_type == "sick":
                         label = "מחלה"
-                    elif seg["wage_percent"] is None:
-                        # סגמנט דינמי - האחוז יחושב לפי מנגנון הרצפים/שבת
-                        label = "work"
-                    elif seg["wage_percent"] == 100:
-                        label = "100%"
-                    elif seg["wage_percent"] == 125:
-                        label = "125%"
-                    elif seg["wage_percent"] == 150:
-                        label = "150%"
-                    elif seg["wage_percent"] == 175:
-                        label = "175%"
-                    elif seg["wage_percent"] == 200:
-                        label = "200%"
                     else:
-                        label = f"{seg['wage_percent']}%"
-                    
-                    entry["buckets"].setdefault(label, 0)
-                    entry["buckets"][label] += overlap
-                    
+                        label = "work"
+
                     # Calculate effective normalized start/end for the segment
                     eff_start_in_part = max(current_seg_start, s_start)
                     eff_end_in_part = min(current_seg_end, s_end)
@@ -1628,7 +1593,6 @@ def get_daily_segments_data(
         prev_day_date = first_of_month - timedelta(days=1)
 
     for day, entry in sorted(daily_map.items()):
-        buckets = entry["buckets"]
         shift_names = sorted(entry["shifts"])
         day_shift_ids = entry.get("day_shift_types", set())  # IDs של המשמרות ביום הזה
         is_fixed_segments = entry.get("is_fixed_segments", False)
@@ -1790,7 +1754,7 @@ def get_daily_segments_data(
                 # הוספה לרשימת סגמנטי עבודה במקום כוננות
                 early_exit_work_segments.append((
                     sb_start, sb_end, "כוננות חלקית", shift_type_id,
-                    "", actual_date, apt_type, actual_apt_type
+                    "", actual_date, apt_type, actual_apt_type, None, "", ""
                 ))
                 # לא מוסיפים ל-trimmed_standbys ולא ל-cancelled_standbys
                 continue
@@ -2042,7 +2006,6 @@ def get_daily_segments_data(
                 "has_work": len(work_segments) > 0,
                 "total_minutes": total_minutes,
                 "total_minutes_no_standby": total_minutes,
-                "buckets": buckets,
                 "chains": chains,
                 "cancelled_standbys": cancelled_standbys,
             })
@@ -2731,7 +2694,6 @@ def get_daily_segments_data(
             "has_work": len(work_segments) > 0,
             "total_minutes": total_minutes,
             "total_minutes_no_standby": sum(w[1]-w[0] for w in work_segments),
-            "buckets": buckets,
             "chains": chains,
             "cancelled_standbys": cancelled_standbys,
         })

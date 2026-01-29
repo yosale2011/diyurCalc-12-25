@@ -489,7 +489,6 @@ def save_segment_to_history(
     shift_type_id: int,
     year: int,
     month: int,
-    wage_percent: int,
     segment_type: str,
     start_time: str,
     end_time: str,
@@ -507,20 +506,19 @@ def save_segment_to_history(
     try:
         cursor.execute("""
             INSERT INTO shift_time_segments_history
-            (segment_id, shift_type_id, year, month, wage_percent, segment_type,
+            (segment_id, shift_type_id, year, month, segment_type,
              start_time, end_time, order_index, created_by)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (segment_id, year, month)
             DO UPDATE SET
                 shift_type_id = EXCLUDED.shift_type_id,
-                wage_percent = EXCLUDED.wage_percent,
                 segment_type = EXCLUDED.segment_type,
                 start_time = EXCLUDED.start_time,
                 end_time = EXCLUDED.end_time,
                 order_index = EXCLUDED.order_index,
                 created_by = EXCLUDED.created_by,
                 created_at = NOW()
-        """, (segment_id, shift_type_id, year, month, wage_percent, segment_type,
+        """, (segment_id, shift_type_id, year, month, segment_type,
               start_time, end_time, order_index, created_by))
 
         conn.commit()
@@ -545,9 +543,9 @@ def save_all_segments_to_history(conn, year: int, month: int, created_by: int = 
     try:
         cursor.execute("""
             INSERT INTO shift_time_segments_history
-            (year, month, segment_id, shift_type_id, wage_percent, segment_type,
+            (year, month, segment_id, shift_type_id, segment_type,
              start_time, end_time, order_index, created_by)
-            SELECT %s, %s, id, shift_type_id, wage_percent, segment_type,
+            SELECT %s, %s, id, shift_type_id, segment_type,
                    start_time, end_time, order_index, %s
             FROM shift_time_segments
             ON CONFLICT (segment_id, year, month) DO NOTHING

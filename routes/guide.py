@@ -23,7 +23,6 @@ from core.history import get_minimum_wage_for_month
 from app_utils import get_daily_segments_data, aggregate_daily_segments_to_monthly
 from core.constants import is_implicit_tagbur, FRIDAY_SHIFT_ID, SHABBAT_SHIFT_ID
 from utils.utils import month_range_ts, format_currency, human_date
-import psycopg2.extras
 
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
@@ -268,103 +267,9 @@ def guide_view(
                 ORDER BY tr.date, tr.start_time
             """, (person_id, start_date, end_date)).fetchall()
 
-            # Pre-load all shift segments in one query (avoid N+1)
-            shift_type_ids = {r['shift_type_id'] for r in month_reports if r['shift_type_id']}
-            segments_by_shift = {}
-            if shift_type_ids:
-                placeholders = ",".join(["%s"] * len(shift_type_ids))
-                cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-                cursor.execute(f"""
-                    SELECT shift_type_id, start_time, end_time, wage_percent, segment_type
-                    FROM shift_time_segments
-                    WHERE shift_type_id IN ({placeholders})
-                    ORDER BY order_index
-                """, tuple(shift_type_ids))
-                for seg in cursor.fetchall():
-                    segments_by_shift.setdefault(seg['shift_type_id'], []).append(seg)
-                cursor.close()
-
-            # Get shift segments with payment calculation
+            # Build shift_segments list for display
             shift_segments = []
             for report in month_reports:
-                # Calculate payment for this specific shift
-                shift_payment = 0.0
-                shift_standby_payment = 0.0
-
-                if report['shift_type_id']:
-                    # Get segments from pre-loaded cache
-                    segments = segments_by_shift.get(report['shift_type_id'], [])
-
-                    if segments:
-                        # Calculate payment based on predefined segments
-                        for seg in segments:
-                            # Convert time strings to minutes
-                            if isinstance(seg['start_time'], str):
-                                hours, minutes = map(int, seg['start_time'].split(':'))
-                                seg_start_min = hours * 60 + minutes
-                            else:
-                                seg_start_min = seg['start_time']
-
-                            if isinstance(seg['end_time'], str):
-                                hours, minutes = map(int, seg['end_time'].split(':'))
-                                seg_end_min = hours * 60 + minutes
-                            else:
-                                seg_end_min = seg['end_time']
-
-                            duration = (seg_end_min - seg_start_min) / 60  # Convert minutes to hours
-
-                            segment_type = seg['segment_type']
-
-                            if segment_type == 'standby':
-                                # Standby payment logic
-                                apt_type = report.get('apartment_type_id')
-                                is_married = report.get('is_married', False)
-                                # Use default standby rate or calculate based on apartment type
-                                standby_rate = 70.0  # Default rate
-                                shift_standby_payment += standby_rate
-                            else:
-                                # Work payment based on wage percent
-                                hourly_rate = MINIMUM_WAGE
-                                if seg['wage_percent'] == 100:
-                                    shift_payment += duration * hourly_rate * 1.0
-                                elif seg['wage_percent'] == 125:
-                                    shift_payment += duration * hourly_rate * 1.25
-                                elif seg['wage_percent'] == 150:
-                                    shift_payment += duration * hourly_rate * 1.5
-                                elif seg['wage_percent'] == 175:
-                                    shift_payment += duration * hourly_rate * 1.75
-                                elif seg['wage_percent'] == 200:
-                                    shift_payment += duration * hourly_rate * 2.0
-                    else:
-                        # No predefined segments - calculate based on actual report times
-                        # This handles "שעת עבודה" and similar shift types
-                        start_time = report.get('start_time')
-                        end_time = report.get('end_time')
-
-                        if start_time and end_time:
-                            # Parse times
-                            if isinstance(start_time, str):
-                                sh, sm = map(int, start_time.split(':'))
-                                start_min = sh * 60 + sm
-                            else:
-                                start_min = start_time.hour * 60 + start_time.minute
-
-                            if isinstance(end_time, str):
-                                eh, em = map(int, end_time.split(':'))
-                                end_min = eh * 60 + em
-                            else:
-                                end_min = end_time.hour * 60 + end_time.minute
-
-                            # Handle overnight shifts
-                            if end_min <= start_min:
-                                end_min += 24 * 60
-
-                            duration_hours = (end_min - start_min) / 60
-
-                            # Use minimum wage at 100% for simple hour reports
-                            shift_payment = duration_hours * MINIMUM_WAGE
-
-                total_shift_payment = shift_payment + shift_standby_payment
 
                 # בדיקת תגבור משתמע להצגה בטאב משמרות
                 shift_id = report.get('shift_type_id')
@@ -381,9 +286,6 @@ def guide_view(
                 shift_segments.append({
                     "report": report,
                     "display_shift_name": display_shift_name,
-                    "payment": total_shift_payment,
-                    "work_payment": shift_payment,
-                    "standby_payment": shift_standby_payment
                 })
 
     # Calculate total standby count
@@ -392,7 +294,7 @@ def guide_view(
     # Get unique years for dropdown
     years = sorted(set(m["year"] for m in months_options), reverse=True) if months_options else [selected_year]
 
-    # Build simple_summary for "old calculation" tab - based on shift_name from reports
+    # Build simple_summary from daily_segments chains (correct calculation)
     standby_payment_total = monthly_totals.get('standby_payment', 0) or 0
     travel_payment = monthly_totals.get('travel', 0) or 0
     extras_payment = monthly_totals.get('extras', 0) or 0
@@ -411,27 +313,36 @@ def guide_view(
         "extras": extras_payment
     }
 
-    # Sum by shift_name from shift_segments (which has the calculated payments)
-    for seg in shift_segments:
-        report = seg.get('report', {})
-        shift_name = report.get('shift_name', '') or ''
-        payment = seg.get('payment', 0) or 0  # Use calculated payment from shift_segments
+    # Aggregate payments from chains (correctly calculated values)
+    for day in daily_segments:
+        day_payment = day.get("payment", 0) or 0
+        chains = day.get("chains", [])
 
-        if 'לילה' in shift_name:
+        # Determine shift type from chains
+        shift_names_in_day = set()
+        for chain in chains:
+            chain_shift_name = chain.get("shift_name", "") or ""
+            if chain_shift_name:
+                shift_names_in_day.add(chain_shift_name)
+
+        # Classify by shift name pattern
+        shift_name_str = " ".join(shift_names_in_day)
+        if 'לילה' in shift_name_str:
             simple_summary["night"]["count"] += 1
-            simple_summary["night"]["payment"] += payment
-        elif 'שישי' in shift_name or 'ערב חג' in shift_name:
+            simple_summary["night"]["payment"] += day_payment
+        elif 'שישי' in shift_name_str or 'ערב חג' in shift_name_str:
             simple_summary["friday"]["count"] += 1
-            simple_summary["friday"]["payment"] += payment
-        elif ('שבת' in shift_name or 'חג' in shift_name) and 'שישי' not in shift_name and 'ערב' not in shift_name:
+            simple_summary["friday"]["payment"] += day_payment
+        elif ('שבת' in shift_name_str or 'חג' in shift_name_str) and 'שישי' not in shift_name_str and 'ערב' not in shift_name_str:
             simple_summary["saturday"]["count"] += 1
-            simple_summary["saturday"]["payment"] += payment
-        elif 'שעת עבודה' in shift_name or 'שעה' in shift_name:
+            simple_summary["saturday"]["payment"] += day_payment
+        elif 'שעת עבודה' in shift_name_str or 'שעה' in shift_name_str:
             simple_summary["hours"]["count"] += 1
-            simple_summary["hours"]["payment"] += payment
-        elif 'חול' in shift_name:
+            simple_summary["hours"]["payment"] += day_payment
+        elif 'חול' in shift_name_str or day_payment > 0:
+            # Default to weekday if has payment but no specific type
             simple_summary["weekday"]["count"] += 1
-            simple_summary["weekday"]["payment"] += payment
+            simple_summary["weekday"]["payment"] += day_payment
 
     render_start = time.time()
     response = templates.TemplateResponse(

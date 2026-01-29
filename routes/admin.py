@@ -235,7 +235,6 @@ async def update_shift_segment(request: Request, segment_id: int) -> JSONRespons
 
     try:
         data = await request.json()
-        new_wage_percent = data.get("wage_percent")
         new_segment_type = data.get("segment_type")
         new_start_time = data.get("start_time")
         new_end_time = data.get("end_time")
@@ -254,8 +253,8 @@ async def update_shift_segment(request: Request, segment_id: int) -> JSONRespons
 
             # Get current values
             cursor = conn.execute(
-                """SELECT id, shift_type_id, wage_percent, segment_type, 
-                          start_time, end_time, order_index 
+                """SELECT id, shift_type_id, segment_type,
+                          start_time, end_time, order_index
                    FROM shift_time_segments WHERE id = %s""",
                 (segment_id,)
             )
@@ -268,8 +267,6 @@ async def update_shift_segment(request: Request, segment_id: int) -> JSONRespons
                 )
 
             # Use current values for any field not provided in the request
-            if new_wage_percent is None:
-                new_wage_percent = current["wage_percent"]
             if new_segment_type is None:
                 new_segment_type = current["segment_type"]
             if new_start_time is None:
@@ -281,7 +278,6 @@ async def update_shift_segment(request: Request, segment_id: int) -> JSONRespons
 
             # Check if there's actually a change
             has_change = (
-                current["wage_percent"] != new_wage_percent or
                 current["segment_type"] != new_segment_type or
                 current["start_time"] != new_start_time or
                 current["end_time"] != new_end_time or
@@ -296,7 +292,6 @@ async def update_shift_segment(request: Request, segment_id: int) -> JSONRespons
                     shift_type_id=current["shift_type_id"],
                     year=current_year,
                     month=current_month,
-                    wage_percent=current["wage_percent"],
                     segment_type=current["segment_type"],
                     start_time=current["start_time"],
                     end_time=current["end_time"],
@@ -306,10 +301,10 @@ async def update_shift_segment(request: Request, segment_id: int) -> JSONRespons
                 # Update the segment
                 conn.execute("""
                     UPDATE shift_time_segments
-                    SET wage_percent = %s, segment_type = %s, 
+                    SET segment_type = %s,
                         start_time = %s, end_time = %s, order_index = %s
                     WHERE id = %s
-                """, (new_wage_percent, new_segment_type, new_start_time, 
+                """, (new_segment_type, new_start_time,
                       new_end_time, new_order_index, segment_id))
                 conn.commit()
 
