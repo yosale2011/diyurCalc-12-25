@@ -21,7 +21,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 import psycopg2
 
 from core.config import config
-from core.database import set_demo_mode, get_demo_mode_from_cookie, is_demo_mode, get_current_db_name, close_all_pools
+from core.database import (
+    set_demo_mode, get_demo_mode_from_cookie, is_demo_mode, get_current_db_name, close_all_pools,
+    get_housing_array_from_cookie, set_housing_array_filter, get_housing_array_filter, get_conn
+)
 from core.logic import (
     calculate_person_monthly_totals,
 )
@@ -99,12 +102,15 @@ templates.env.filters["format_currency"] = format_currency
 templates.env.globals["app_version"] = config.VERSION
 
 
-# Middleware to set demo mode from cookie
+# Middleware to set demo mode and housing array filter from cookies
 class DemoModeMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         # Set demo mode based on cookie
         demo_mode = get_demo_mode_from_cookie(request)
         set_demo_mode(demo_mode)
+        # Set housing array filter based on cookie
+        housing_array_id = get_housing_array_from_cookie(request)
+        set_housing_array_filter(housing_array_id)
         response = await call_next(request)
         return response
 
@@ -398,6 +404,63 @@ def demo_mode_status(request: Request):
     return {
         "demo_mode": demo,
         "db_name": "פיתוח" if demo else "עבודה"
+    }
+
+
+@app.get("/api/housing-arrays")
+def get_housing_arrays():
+    """מחזיר רשימת כל מערכי הדיור."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, name FROM housing_arrays ORDER BY name"
+        ).fetchall()
+    return [{"id": r["id"], "name": r["name"]} for r in rows]
+
+
+@app.post("/api/set-housing-array-filter")
+async def set_housing_array_filter_api(request: Request):
+    """מגדיר את מערך הדיור לסינון (שומר בעוגייה)."""
+    try:
+        body = await request.json()
+        housing_array_id = body.get("housing_array_id")
+    except Exception:
+        housing_array_id = None
+
+    response = JSONResponse({
+        "success": True,
+        "housing_array_id": housing_array_id
+    })
+
+    if housing_array_id is not None:
+        response.set_cookie(
+            key="housing_array_id",
+            value=str(housing_array_id),
+            max_age=86400 * 30,  # 30 days
+            httponly=False,
+            samesite="lax"
+        )
+    else:
+        response.delete_cookie("housing_array_id")
+
+    return response
+
+
+@app.get("/api/housing-array-status")
+def housing_array_status(request: Request):
+    """מחזיר את מצב הסינון הנוכחי לפי מערך דיור."""
+    current_id = get_housing_array_from_cookie(request)
+    current_name = None
+    if current_id:
+        with get_conn() as conn:
+            row = conn.execute(
+                "SELECT name FROM housing_arrays WHERE id = %s",
+                (current_id,)
+            ).fetchone()
+            if row:
+                current_name = row["name"]
+    return {
+        "housing_array_id": current_id,
+        "housing_array_name": current_name
     }
 
 

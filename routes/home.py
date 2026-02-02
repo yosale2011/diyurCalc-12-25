@@ -12,7 +12,7 @@ from fastapi import Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from core.config import config
-from core.database import get_conn
+from core.database import get_conn, get_housing_array_filter
 from core.logic import get_active_guides
 from utils.utils import month_range_ts, available_months_from_db, format_currency, human_date
 
@@ -37,8 +37,11 @@ def home(
     guides = get_active_guides()
     logger.info(f"get_active_guides took: {time.time() - guides_start:.4f}s")
 
+    # קבלת פילטר מערך דיור (לשימוש בשאילתות)
+    housing_filter = get_housing_array_filter()
+
     months_start = time.time()
-    months_all = available_months_from_db()
+    months_all = available_months_from_db(housing_filter)
     logger.info(f"available_months_from_db took: {time.time() - months_start:.4f}s")
 
     if months_all:
@@ -61,26 +64,56 @@ def home(
         end_date = end_dt.date()
         counts_start = time.time()
         with get_conn() as conn:
-            for row in conn.execute(
-                """
-                SELECT person_id, COUNT(*) AS cnt
-                FROM time_reports
-                WHERE date >= %s AND date < %s
-                GROUP BY person_id
-                """,
-                (start_date, end_date),
-            ):
-                counts[row["person_id"]] = row["cnt"]
+            if housing_filter is not None:
+                # Filter by housing array
+                for row in conn.execute(
+                    """
+                    SELECT tr.person_id, COUNT(*) AS cnt
+                    FROM time_reports tr
+                    JOIN apartments ap ON ap.id = tr.apartment_id
+                    WHERE tr.date >= %s AND tr.date < %s
+                      AND ap.housing_array_id = %s
+                    GROUP BY tr.person_id
+                    """,
+                    (start_date, end_date, housing_filter),
+                ):
+                    counts[row["person_id"]] = row["cnt"]
+            else:
+                # No filter - count all
+                for row in conn.execute(
+                    """
+                    SELECT person_id, COUNT(*) AS cnt
+                    FROM time_reports
+                    WHERE date >= %s AND date < %s
+                    GROUP BY person_id
+                    """,
+                    (start_date, end_date),
+                ):
+                    counts[row["person_id"]] = row["cnt"]
             # גם מדריכים עם רכיבי תשלום צריכים להופיע
-            for row in conn.execute(
-                """
-                SELECT DISTINCT person_id
-                FROM payment_components
-                WHERE date >= %s AND date < %s
-                """,
-                (start_date, end_date),
-            ):
-                has_payment_components.add(row["person_id"])
+            # כשמסננים לפי מערך דיור - רק רכיבים שקשורים לדירות מהמערך הזה
+            if housing_filter is not None:
+                for row in conn.execute(
+                    """
+                    SELECT DISTINCT pc.person_id
+                    FROM payment_components pc
+                    JOIN apartments ap ON ap.id = pc.apartment_id
+                    WHERE pc.date >= %s AND pc.date < %s
+                      AND ap.housing_array_id = %s
+                    """,
+                    (start_date, end_date, housing_filter),
+                ):
+                    has_payment_components.add(row["person_id"])
+            else:
+                for row in conn.execute(
+                    """
+                    SELECT DISTINCT person_id
+                    FROM payment_components
+                    WHERE date >= %s AND date < %s
+                    """,
+                    (start_date, end_date),
+                ):
+                    has_payment_components.add(row["person_id"])
         logger.info(f"Counts query took: {time.time() - counts_start:.4f}s")
 
     # Calculate seniority years for each guide
@@ -98,7 +131,8 @@ def home(
             continue
 
         if selected_year and selected_month:
-            # הצג מדריכים עם לפחות משמרת אחת או רכיבי תשלום בחודש
+            # הצג מדריכים עם משמרות או רכיבי תשלום
+            # (כשיש סינון לפי מערך דיור, has_payment_components כבר מסונן)
             if counts.get(g["id"], 0) < 1 and g["id"] not in has_payment_components:
                 continue
 

@@ -26,6 +26,9 @@ _demo_pool: Optional[pool.ThreadedConnectionPool] = None
 # Context variable to track demo mode per request
 _demo_mode: ContextVar[bool] = ContextVar('demo_mode', default=False)
 
+# Context variable to track housing array filter per request
+_housing_array_filter: ContextVar[Optional[int]] = ContextVar('housing_array_filter', default=None)
+
 
 def is_demo_mode() -> bool:
     """Check if currently in demo mode."""
@@ -35,6 +38,24 @@ def is_demo_mode() -> bool:
 def set_demo_mode(enabled: bool) -> None:
     """Set demo mode for current context."""
     _demo_mode.set(enabled)
+
+
+def get_housing_array_filter() -> Optional[int]:
+    """מחזיר את מזהה מערך הדיור לסינון (None = כל המערכים)."""
+    return _housing_array_filter.get()
+
+
+def set_housing_array_filter(housing_array_id: Optional[int]) -> None:
+    """מגדיר את מערך הדיור לסינון."""
+    _housing_array_filter.set(housing_array_id)
+
+
+def get_housing_array_from_cookie(request) -> Optional[int]:
+    """מחלץ את מזהה מערך הדיור מעוגיית הבקשה."""
+    cookie_value = request.cookies.get("housing_array_id", "")
+    if cookie_value and cookie_value.isdigit():
+        return int(cookie_value)
+    return None
 
 
 def get_demo_mode_from_cookie(request) -> bool:

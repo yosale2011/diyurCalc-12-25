@@ -226,6 +226,17 @@
         <a href="/admin/demo-sync" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">סנכרון דמו</a>
     </div>
     <div style="display: flex; align-items: center; gap: 12px;">
+        <select id="housing-array-select" onchange="setHousingArrayFilter(this.value)" style="
+            padding: 6px 10px;
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.5);
+            background: rgba(255,255,255,0.15);
+            color: #fff;
+            font-size: 0.85em;
+            cursor: pointer;
+        ">
+            <option value="">כל המערכים</option>
+        </select>
         <button id="demo-toggle-btn" onclick="toggleDemoMode()" style="
             padding: 6px 12px;
             border-radius: 6px;
@@ -313,7 +324,63 @@
     document.addEventListener('DOMContentLoaded', function() {
         const isDemo = document.cookie.split('; ').find(row => row.startsWith('demo_mode='))?.split('=')[1] === 'true';
         updateDemoUI(isDemo);
+        loadHousingArrays();
     });
+
+    // Housing array filter functionality
+    async function loadHousingArrays() {
+        try {
+            const response = await fetch('/api/housing-arrays');
+            const arrays = await response.json();
+            const select = document.getElementById('housing-array-select');
+            if (!select) return;
+
+            // Get current value from cookie
+            const currentId = document.cookie.split('; ')
+                .find(row => row.startsWith('housing_array_id='))?.split('=')[1] || '';
+
+            arrays.forEach(arr => {
+                const option = document.createElement('option');
+                option.value = arr.id;
+                option.textContent = arr.name;
+                if (arr.id.toString() === currentId) {
+                    option.selected = true;
+                }
+                select.appendChild(option);
+            });
+
+            // Update select style if filter is active
+            updateHousingArrayUI(currentId);
+        } catch (err) {
+            console.error('Failed to load housing arrays:', err);
+        }
+    }
+
+    function updateHousingArrayUI(filterId) {
+        const select = document.getElementById('housing-array-select');
+        if (!select) return;
+
+        if (filterId) {
+            select.style.background = 'rgba(245, 158, 11, 0.4)';
+            select.style.borderColor = '#f59e0b';
+        } else {
+            select.style.background = 'rgba(255,255,255,0.15)';
+            select.style.borderColor = 'rgba(255,255,255,0.5)';
+        }
+    }
+
+    async function setHousingArrayFilter(value) {
+        try {
+            await fetch('/api/set-housing-array-filter', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ housing_array_id: value ? parseInt(value) : null })
+            });
+            window.location.reload();
+        } catch (err) {
+            console.error('Failed to set housing array filter:', err);
+        }
+    }
   </script>
 </body>
 </html>

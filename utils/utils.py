@@ -325,21 +325,52 @@ def available_months(rows: Iterable[Dict]) -> List[Tuple[int, int]]:
 
 
 @cached(ttl=300)  # Cache for 5 minutes
-def available_months_from_db() -> List[Tuple[int, int]]:
-    """Fetch distinct months from time_reports table."""
+def available_months_from_db(housing_array_id: int = None) -> List[Tuple[int, int]]:
+    """מחזיר רשימת חודשים זמינים מטבלאות time_reports ו-payment_components.
+
+    Args:
+        housing_array_id: מזהה מערך דיור לסינון (None = כל המערכים)
+
+    Returns:
+        רשימה ממוינת של (year, month) tuples עם נתונים
+    """
     from core.database import get_pooled_connection, return_connection
     conn = get_pooled_connection()
     try:
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        # Optimized: extract year/month directly in SQL instead of fetching all dates
-        cursor.execute("""
-            SELECT DISTINCT
-                EXTRACT(YEAR FROM date)::integer AS year,
-                EXTRACT(MONTH FROM date)::integer AS month
-            FROM time_reports
-            WHERE date IS NOT NULL
-            ORDER BY year, month
-        """)
+
+        if housing_array_id is not None:
+            # סינון לפי מערך דיור - כולל חודשים עם משמרות או תוספות
+            cursor.execute("""
+                SELECT DISTINCT year, month FROM (
+                    SELECT
+                        EXTRACT(YEAR FROM tr.date)::integer AS year,
+                        EXTRACT(MONTH FROM tr.date)::integer AS month
+                    FROM time_reports tr
+                    JOIN apartments ap ON ap.id = tr.apartment_id
+                    WHERE tr.date IS NOT NULL
+                      AND ap.housing_array_id = %s
+                    UNION
+                    SELECT
+                        EXTRACT(YEAR FROM pc.date)::integer AS year,
+                        EXTRACT(MONTH FROM pc.date)::integer AS month
+                    FROM payment_components pc
+                    JOIN apartments ap ON ap.id = pc.apartment_id
+                    WHERE pc.date IS NOT NULL
+                      AND ap.housing_array_id = %s
+                ) combined
+                ORDER BY year, month
+            """, (housing_array_id, housing_array_id))
+        else:
+            # ללא סינון - כל החודשים מ-time_reports
+            cursor.execute("""
+                SELECT DISTINCT
+                    EXTRACT(YEAR FROM date)::integer AS year,
+                    EXTRACT(MONTH FROM date)::integer AS month
+                FROM time_reports
+                WHERE date IS NOT NULL
+                ORDER BY year, month
+            """)
         rows = cursor.fetchall()
     finally:
         cursor.close()

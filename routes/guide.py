@@ -13,7 +13,7 @@ from fastapi import Request, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 from core.config import config
-from core.database import get_conn
+from core.database import get_conn, get_housing_array_filter
 from core.time_utils import get_shabbat_times_cache
 from core.logic import (
     get_payment_codes,
@@ -254,18 +254,36 @@ def guide_view(
             # Convert datetime to date for PostgreSQL date column
             start_date = start_dt.date()
             end_date = end_dt.date()
-            month_reports = conn.execute("""
-                SELECT tr.*, st.name as shift_name,
-                       a.apartment_type_id, a.name as apartment_name,
-                       tr.rate_apartment_type_id,
-                       p.is_married
-                FROM time_reports tr
-                LEFT JOIN shift_types st ON st.id = tr.shift_type_id
-                LEFT JOIN apartments a ON tr.apartment_id = a.id
-                LEFT JOIN people p ON tr.person_id = p.id
-                WHERE tr.person_id = %s AND tr.date >= %s AND tr.date < %s
-                ORDER BY tr.date, tr.start_time
-            """, (person_id, start_date, end_date)).fetchall()
+
+            # סינון לפי מערך דיור אם הוגדר
+            housing_filter = get_housing_array_filter()
+            if housing_filter is not None:
+                month_reports = conn.execute("""
+                    SELECT tr.*, st.name as shift_name,
+                           a.apartment_type_id, a.name as apartment_name,
+                           tr.rate_apartment_type_id,
+                           p.is_married
+                    FROM time_reports tr
+                    LEFT JOIN shift_types st ON st.id = tr.shift_type_id
+                    LEFT JOIN apartments a ON tr.apartment_id = a.id
+                    LEFT JOIN people p ON tr.person_id = p.id
+                    WHERE tr.person_id = %s AND tr.date >= %s AND tr.date < %s
+                      AND a.housing_array_id = %s
+                    ORDER BY tr.date, tr.start_time
+                """, (person_id, start_date, end_date, housing_filter)).fetchall()
+            else:
+                month_reports = conn.execute("""
+                    SELECT tr.*, st.name as shift_name,
+                           a.apartment_type_id, a.name as apartment_name,
+                           tr.rate_apartment_type_id,
+                           p.is_married
+                    FROM time_reports tr
+                    LEFT JOIN shift_types st ON st.id = tr.shift_type_id
+                    LEFT JOIN apartments a ON tr.apartment_id = a.id
+                    LEFT JOIN people p ON tr.person_id = p.id
+                    WHERE tr.person_id = %s AND tr.date >= %s AND tr.date < %s
+                    ORDER BY tr.date, tr.start_time
+                """, (person_id, start_date, end_date)).fetchall()
 
             # Build shift_segments list for display
             shift_segments = []

@@ -16,6 +16,7 @@ from core.history import (
     get_apartment_type_for_month, get_person_status_for_month,
     get_all_housing_rates_for_month
 )
+from core.database import get_housing_array_filter
 from core.sick_days import _identify_sick_day_sequences, get_sick_payment_rate
 
 # =============================================================================
@@ -631,14 +632,24 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
     MAX_LOOKBACK_DAYS = 31
     earliest_date = last_day_date
 
+    # Get housing array filter
+    housing_filter = get_housing_array_filter()
+
     for days_back in range(MAX_LOOKBACK_DAYS):
         check_date = last_day_date - timedelta(days=days_back)
 
-        # בדיקה אם יש דיווחים ביום הזה
-        cursor.execute("""
-            SELECT COUNT(*) as cnt FROM time_reports
-            WHERE person_id = %s AND date = %s
-        """, (person_id, check_date))
+        # בדיקה אם יש דיווחים ביום הזה (עם סינון לפי מערך דיור אם נדרש)
+        if housing_filter is not None:
+            cursor.execute("""
+                SELECT COUNT(*) as cnt FROM time_reports tr
+                JOIN apartments ap ON ap.id = tr.apartment_id
+                WHERE tr.person_id = %s AND tr.date = %s AND ap.housing_array_id = %s
+            """, (person_id, check_date, housing_filter))
+        else:
+            cursor.execute("""
+                SELECT COUNT(*) as cnt FROM time_reports
+                WHERE person_id = %s AND date = %s
+            """, (person_id, check_date))
         row = cursor.fetchone()
 
         if row["cnt"] == 0:
@@ -646,18 +657,32 @@ def _calculate_previous_month_carryover(conn, person_id: int, year: int, month: 
             break
         earliest_date = check_date
 
-    # שליפת כל הדיווחים מהטווח שמצאנו
-    cursor.execute("""
-        SELECT tr.date, tr.start_time, tr.end_time, tr.shift_type_id, tr.apartment_id,
-               ap.housing_array_id, at.hourly_wage_supplement, p.is_married
-        FROM time_reports tr
-        LEFT JOIN shift_types st ON st.id = tr.shift_type_id
-        LEFT JOIN apartments ap ON ap.id = tr.apartment_id
-        LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
-        LEFT JOIN people p ON p.id = tr.person_id
-        WHERE tr.person_id = %s AND tr.date >= %s AND tr.date <= %s
-        ORDER BY tr.date, tr.start_time
-    """, (person_id, earliest_date, last_day_date))
+    # שליפת כל הדיווחים מהטווח שמצאנו (עם סינון לפי מערך דיור אם נדרש)
+    if housing_filter is not None:
+        cursor.execute("""
+            SELECT tr.date, tr.start_time, tr.end_time, tr.shift_type_id, tr.apartment_id,
+                   ap.housing_array_id, at.hourly_wage_supplement, p.is_married
+            FROM time_reports tr
+            LEFT JOIN shift_types st ON st.id = tr.shift_type_id
+            JOIN apartments ap ON ap.id = tr.apartment_id
+            LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
+            LEFT JOIN people p ON p.id = tr.person_id
+            WHERE tr.person_id = %s AND tr.date >= %s AND tr.date <= %s
+              AND ap.housing_array_id = %s
+            ORDER BY tr.date, tr.start_time
+        """, (person_id, earliest_date, last_day_date, housing_filter))
+    else:
+        cursor.execute("""
+            SELECT tr.date, tr.start_time, tr.end_time, tr.shift_type_id, tr.apartment_id,
+                   ap.housing_array_id, at.hourly_wage_supplement, p.is_married
+            FROM time_reports tr
+            LEFT JOIN shift_types st ON st.id = tr.shift_type_id
+            LEFT JOIN apartments ap ON ap.id = tr.apartment_id
+            LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
+            LEFT JOIN people p ON p.id = tr.person_id
+            WHERE tr.person_id = %s AND tr.date >= %s AND tr.date <= %s
+            ORDER BY tr.date, tr.start_time
+        """, (person_id, earliest_date, last_day_date))
     all_reports = cursor.fetchall()
 
     if not all_reports:
@@ -928,7 +953,9 @@ def get_daily_segments_data(
     conn, person_id: int, year: int, month: int, shabbat_cache: Dict, minimum_wage: float,
     person_status_cache: Optional[Dict[int, dict]] = None,
     apartment_type_cache: Optional[Dict[int, int]] = None,
-    housing_rates_cache: Optional[Dict] = None
+    housing_rates_cache: Optional[Dict] = None,
+    preloaded_reports: Optional[List] = None,
+    preloaded_segments: Optional[Dict[int, List]] = None
 ):
     """
     Calculates detailed daily segments for a given employee and month.
@@ -938,39 +965,75 @@ def get_daily_segments_data(
     - person_status_cache: dict mapping person_id to status dict
     - apartment_type_cache: dict mapping apartment_id to apartment_type_id
     - housing_rates_cache: dict mapping (shift_type_id, housing_array_id) to rate info
+    - preloaded_reports: pre-fetched reports for this person (skips DB query)
+    - preloaded_segments: dict mapping shift_type_id to segments list (skips DB query)
     """
-    start_dt, end_dt = month_range_ts(year, month)
-    
-    # Convert datetime to date for PostgreSQL date column
-    start_date = start_dt.date()
-    end_date = end_dt.date()
-    
-    # Fetch reports
-    reports = conn.execute("""
-        SELECT tr.*,
-               st.name AS shift_name,
-               st.color AS shift_color,
-               st.for_friday_eve,
-               st.for_shabbat_holiday,
-               st.is_special_hourly AS shift_is_special_hourly,
-               ap.name AS apartment_name,
-               ap.apartment_type_id,
-               ap.housing_array_id,
-               at.hourly_wage_supplement,
-               at.name AS apartment_type_name,
-               ha.name AS housing_array_name,
-               p.is_married,
-               p.name as person_name
-        FROM time_reports tr
-        LEFT JOIN shift_types st ON st.id = tr.shift_type_id
-        LEFT JOIN apartments ap ON ap.id = tr.apartment_id
-        LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
-        LEFT JOIN housing_arrays ha ON ha.id = ap.housing_array_id
-        LEFT JOIN people p ON p.id = tr.person_id
-        WHERE tr.person_id = %s AND tr.date >= %s AND tr.date < %s
-        ORDER BY tr.date, tr.start_time
-    """, (person_id, start_date, end_date)).fetchall()
-    
+    # Use preloaded reports if provided (bulk optimization)
+    if preloaded_reports is not None:
+        reports = preloaded_reports
+    else:
+        start_dt, end_dt = month_range_ts(year, month)
+
+        # Convert datetime to date for PostgreSQL date column
+        start_date = start_dt.date()
+        end_date = end_dt.date()
+
+        # Get housing array filter
+        housing_filter = get_housing_array_filter()
+
+        # Fetch reports - with optional housing array filter
+        if housing_filter is not None:
+            reports = conn.execute("""
+                SELECT tr.*,
+                       st.name AS shift_name,
+                       st.color AS shift_color,
+                       st.for_friday_eve,
+                       st.for_shabbat_holiday,
+                       st.is_special_hourly AS shift_is_special_hourly,
+                       ap.name AS apartment_name,
+                       ap.apartment_type_id,
+                       ap.housing_array_id,
+                       at.hourly_wage_supplement,
+                       at.name AS apartment_type_name,
+                       ha.name AS housing_array_name,
+                       p.is_married,
+                       p.name as person_name
+                FROM time_reports tr
+                LEFT JOIN shift_types st ON st.id = tr.shift_type_id
+                JOIN apartments ap ON ap.id = tr.apartment_id
+                LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
+                LEFT JOIN housing_arrays ha ON ha.id = ap.housing_array_id
+                LEFT JOIN people p ON p.id = tr.person_id
+                WHERE tr.person_id = %s AND tr.date >= %s AND tr.date < %s
+                  AND ap.housing_array_id = %s
+                ORDER BY tr.date, tr.start_time
+            """, (person_id, start_date, end_date, housing_filter)).fetchall()
+        else:
+            reports = conn.execute("""
+                SELECT tr.*,
+                       st.name AS shift_name,
+                       st.color AS shift_color,
+                       st.for_friday_eve,
+                       st.for_shabbat_holiday,
+                       st.is_special_hourly AS shift_is_special_hourly,
+                       ap.name AS apartment_name,
+                       ap.apartment_type_id,
+                       ap.housing_array_id,
+                       at.hourly_wage_supplement,
+                       at.name AS apartment_type_name,
+                       ha.name AS housing_array_name,
+                       p.is_married,
+                       p.name as person_name
+                FROM time_reports tr
+                LEFT JOIN shift_types st ON st.id = tr.shift_type_id
+                LEFT JOIN apartments ap ON ap.id = tr.apartment_id
+                LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
+                LEFT JOIN housing_arrays ha ON ha.id = ap.housing_array_id
+                LEFT JOIN people p ON p.id = tr.person_id
+                WHERE tr.person_id = %s AND tr.date >= %s AND tr.date < %s
+                ORDER BY tr.date, tr.start_time
+            """, (person_id, start_date, end_date)).fetchall()
+
     person_name = reports[0]["person_name"] if reports else ""
 
     # Override apartment types and marital status with historical data
@@ -1025,25 +1088,32 @@ def get_daily_segments_data(
     # זיהוי רצפי ימי מחלה לחישוב אחוזי תשלום מדורגים
     sick_day_sequence = _identify_sick_day_sequences(reports)
 
-    # Fetch segments
+    # Fetch segments - use preloaded if available (bulk optimization)
     shift_ids = {r["shift_type_id"] for r in reports if r["shift_type_id"]}
-    shift_segments = []
-    if shift_ids:
-        placeholders = ",".join(["%s"] * len(shift_ids))
-        shift_segments = conn.execute(
-            f"""
-            SELECT seg.*, st.name AS shift_name
-            FROM shift_time_segments seg
-            JOIN shift_types st ON st.id = seg.shift_type_id
-            WHERE seg.shift_type_id IN ({placeholders})
-            ORDER BY seg.shift_type_id, seg.order_index, seg.id
-            """,
-            tuple(shift_ids),
-        ).fetchall()
-        
-    segments_by_shift = {}
-    for seg in shift_segments:
-        segments_by_shift.setdefault(seg["shift_type_id"], []).append(seg)
+    if preloaded_segments is not None:
+        # Use preloaded segments - filter to only needed shift_ids
+        segments_by_shift = {
+            sid: segs for sid, segs in preloaded_segments.items()
+            if sid in shift_ids
+        }
+    else:
+        shift_segments = []
+        if shift_ids:
+            placeholders = ",".join(["%s"] * len(shift_ids))
+            shift_segments = conn.execute(
+                f"""
+                SELECT seg.*, st.name AS shift_name
+                FROM shift_time_segments seg
+                JOIN shift_types st ON st.id = seg.shift_type_id
+                WHERE seg.shift_type_id IN ({placeholders})
+                ORDER BY seg.shift_type_id, seg.order_index, seg.id
+                """,
+                tuple(shift_ids),
+            ).fetchall()
+
+        segments_by_shift = {}
+        for seg in shift_segments:
+            segments_by_shift.setdefault(seg["shift_type_id"], []).append(seg)
     
     # Build a map of (shift_type_id, housing_array_id) -> {"weekday": rate, "shabbat": rate}
     # This allows using custom rates for different housing arrays
@@ -2710,7 +2780,9 @@ def aggregate_daily_segments_to_monthly(
     person_id: int,
     year: int,
     month: int,
-    minimum_wage: float
+    minimum_wage: float,
+    preloaded_payment_comps: Optional[List] = None,
+    person_start_date: Optional[Any] = None
 ) -> Dict[str, Any]:
     """
     מאחד את כל הנתונים מ-daily_segments למילון monthly_totals.
@@ -2723,6 +2795,8 @@ def aggregate_daily_segments_to_monthly(
         year: שנה
         month: חודש
         minimum_wage: שכר מינימום לחודש
+        preloaded_payment_comps: רשימת רכיבי תשלום שנטענו מראש (אופטימיזציה)
+        person_start_date: תאריך תחילת העבודה של העובד (אופטימיזציה)
 
     Returns:
         מילון monthly_totals עם כל השדות הנדרשים לכל הטאבים
@@ -2954,18 +3028,32 @@ def aggregate_daily_segments_to_monthly(
     # ימי מחלה שנוצלו (התשלום כבר חושב בלולאה עם האחוזים המדורגים)
     monthly_totals["sick_days_taken"] = len(sick_days_set)
 
-    # שליפת נסיעות ותוספות מהדאטבייס
-    month_start = datetime(year, month, 1, tzinfo=LOCAL_TZ)
-    if month == 12:
-        month_end = datetime(year + 1, 1, 1, tzinfo=LOCAL_TZ)
+    # שליפת נסיעות ותוספות - שימוש בנתונים שנטענו מראש אם קיימים
+    if preloaded_payment_comps is not None:
+        payment_comps = preloaded_payment_comps
     else:
-        month_end = datetime(year, month + 1, 1, tzinfo=LOCAL_TZ)
+        month_start = datetime(year, month, 1, tzinfo=LOCAL_TZ)
+        if month == 12:
+            month_end = datetime(year + 1, 1, 1, tzinfo=LOCAL_TZ)
+        else:
+            month_end = datetime(year, month + 1, 1, tzinfo=LOCAL_TZ)
 
-    payment_comps = conn.execute("""
-        SELECT (quantity * rate) as total_amount, component_type_id
-        FROM payment_components
-        WHERE person_id = %s AND date >= %s AND date < %s
-    """, (person_id, month_start, month_end)).fetchall()
+        # סינון רכיבי תשלום לפי מערך דיור אם נדרש
+        housing_filter = get_housing_array_filter()
+        if housing_filter is not None:
+            payment_comps = conn.execute("""
+                SELECT (pc.quantity * pc.rate) as total_amount, pc.component_type_id
+                FROM payment_components pc
+                JOIN apartments ap ON ap.id = pc.apartment_id
+                WHERE pc.person_id = %s AND pc.date >= %s AND pc.date < %s
+                  AND ap.housing_array_id = %s
+            """, (person_id, month_start, month_end, housing_filter)).fetchall()
+        else:
+            payment_comps = conn.execute("""
+                SELECT (quantity * rate) as total_amount, component_type_id
+                FROM payment_components
+                WHERE person_id = %s AND date >= %s AND date < %s
+            """, (person_id, month_start, month_end)).fetchall()
 
     for pc in payment_comps:
         amount = (pc["total_amount"] or 0) / 100
@@ -2974,16 +3062,20 @@ def aggregate_daily_segments_to_monthly(
         else:
             monthly_totals["extras"] += amount
 
-    # שליפת פרטי העובד לחישוב צבירות
-    person = conn.execute(
-        "SELECT start_date FROM people WHERE id = %s", (person_id,)
-    ).fetchone()
+    # שליפת פרטי העובד לחישוב צבירות - שימוש בנתונים שנטענו מראש אם קיימים
+    if person_start_date is not None:
+        start_date_ts = person_start_date
+    else:
+        person = conn.execute(
+            "SELECT start_date FROM people WHERE id = %s", (person_id,)
+        ).fetchone()
+        start_date_ts = person["start_date"] if person else None
 
     # חישוב צבירות (מחלה וחופשה)
-    if person:
+    if start_date_ts is not None:
         accruals = calculate_accruals(
             actual_work_days=monthly_totals["actual_work_days"],
-            start_date_ts=person["start_date"],
+            start_date_ts=start_date_ts,
             report_year=year,
             report_month=month
         )

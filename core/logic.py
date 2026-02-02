@@ -14,6 +14,7 @@ from typing import List, Tuple, Dict, Any
 
 from utils.cache_manager import cached
 from core.time_utils import get_shabbat_times_cache
+from core.database import get_housing_array_filter
 
 # =============================================================================
 # Configure logging
@@ -53,25 +54,50 @@ def get_available_months_for_person(conn, person_id: int) -> List[Tuple[int, int
     """Fetch distinct months for a specific person efficiently using SQL.
 
     כולל חודשים עם משמרות (time_reports) או רכיבי תשלום (payment_components).
+    מסנן לפי מערך דיור אם הוגדר פילטר.
     """
     cursor = conn.cursor()
+    housing_filter = get_housing_array_filter()
+
     try:
-        cursor.execute("""
-            SELECT DISTINCT year, month FROM (
-                SELECT
-                    CAST(EXTRACT(YEAR FROM date) AS INTEGER) as year,
-                    CAST(EXTRACT(MONTH FROM date) AS INTEGER) as month
-                FROM time_reports
-                WHERE person_id = %s
-                UNION
-                SELECT
-                    CAST(EXTRACT(YEAR FROM date) AS INTEGER) as year,
-                    CAST(EXTRACT(MONTH FROM date) AS INTEGER) as month
-                FROM payment_components
-                WHERE person_id = %s
-            ) combined
-            ORDER BY year DESC, month DESC
-        """, (person_id, person_id))
+        if housing_filter is not None:
+            # סינון לפי מערך דיור
+            cursor.execute("""
+                SELECT DISTINCT year, month FROM (
+                    SELECT
+                        CAST(EXTRACT(YEAR FROM tr.date) AS INTEGER) as year,
+                        CAST(EXTRACT(MONTH FROM tr.date) AS INTEGER) as month
+                    FROM time_reports tr
+                    JOIN apartments ap ON ap.id = tr.apartment_id
+                    WHERE tr.person_id = %s AND ap.housing_array_id = %s
+                    UNION
+                    SELECT
+                        CAST(EXTRACT(YEAR FROM pc.date) AS INTEGER) as year,
+                        CAST(EXTRACT(MONTH FROM pc.date) AS INTEGER) as month
+                    FROM payment_components pc
+                    JOIN apartments ap ON ap.id = pc.apartment_id
+                    WHERE pc.person_id = %s AND ap.housing_array_id = %s
+                ) combined
+                ORDER BY year DESC, month DESC
+            """, (person_id, housing_filter, person_id, housing_filter))
+        else:
+            # ללא סינון
+            cursor.execute("""
+                SELECT DISTINCT year, month FROM (
+                    SELECT
+                        CAST(EXTRACT(YEAR FROM date) AS INTEGER) as year,
+                        CAST(EXTRACT(MONTH FROM date) AS INTEGER) as month
+                    FROM time_reports
+                    WHERE person_id = %s
+                    UNION
+                    SELECT
+                        CAST(EXTRACT(YEAR FROM date) AS INTEGER) as year,
+                        CAST(EXTRACT(MONTH FROM date) AS INTEGER) as month
+                    FROM payment_components
+                    WHERE person_id = %s
+                ) combined
+                ORDER BY year DESC, month DESC
+            """, (person_id, person_id))
         rows = cursor.fetchall()
         return [(r[0], r[1]) for r in rows]
     except Exception as e:
@@ -177,11 +203,14 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
 
     Uses the unified calculation logic from app_utils (get_daily_segments_data +
     aggregate_daily_segments_to_monthly) which is the source of truth for wage calculation.
+
+    Optimized with bulk loading: all data is loaded in a few queries instead of per-person.
     """
     from core.history import (
         get_minimum_wage_for_month,
         get_all_person_statuses_for_month,
         get_all_apartment_types_for_month,
+        get_all_housing_rates_for_month,
     )
     from core.database import PostgresConnection
     from app_utils import get_daily_segments_data, aggregate_daily_segments_to_monthly
@@ -202,19 +231,133 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
 
     # Pre-load all caches ONCE for the entire month (optimization)
     person_ids = [p["id"] for p in people]
+    start_dt, end_dt = month_range_ts(year, month)
+    start_date = start_dt.date()
+    end_date = end_dt.date()
+    housing_filter = get_housing_array_filter()
+
     person_status_cache = get_all_person_statuses_for_month(conn, person_ids, year, month)
 
-    # Get all apartment IDs used by active people this month
-    start_dt, end_dt = month_range_ts(year, month)
+    # ============================================================
+    # BULK LOADING OPTIMIZATION - Load all data in single queries
+    # ============================================================
+
+    # 1. Load ALL time_reports for all people at once
     cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    cursor.execute("""
-        SELECT DISTINCT apartment_id
-        FROM time_reports
-        WHERE person_id = ANY(%s) AND date >= %s AND date < %s AND apartment_id IS NOT NULL
-    """, (person_ids, start_dt.date(), end_dt.date()))
-    all_apartment_ids = [r["apartment_id"] for r in cursor.fetchall()]
+    if housing_filter is not None:
+        cursor.execute("""
+            SELECT tr.*,
+                   st.name AS shift_name,
+                   st.color AS shift_color,
+                   st.for_friday_eve,
+                   st.for_shabbat_holiday,
+                   st.is_special_hourly AS shift_is_special_hourly,
+                   ap.name AS apartment_name,
+                   ap.apartment_type_id,
+                   ap.housing_array_id,
+                   at.hourly_wage_supplement,
+                   at.name AS apartment_type_name,
+                   ha.name AS housing_array_name,
+                   p.is_married,
+                   p.name as person_name
+            FROM time_reports tr
+            LEFT JOIN shift_types st ON st.id = tr.shift_type_id
+            JOIN apartments ap ON ap.id = tr.apartment_id
+            LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
+            LEFT JOIN housing_arrays ha ON ha.id = ap.housing_array_id
+            LEFT JOIN people p ON p.id = tr.person_id
+            WHERE tr.person_id = ANY(%s) AND tr.date >= %s AND tr.date < %s
+              AND ap.housing_array_id = %s
+            ORDER BY tr.person_id, tr.date, tr.start_time
+        """, (person_ids, start_date, end_date, housing_filter))
+    else:
+        cursor.execute("""
+            SELECT tr.*,
+                   st.name AS shift_name,
+                   st.color AS shift_color,
+                   st.for_friday_eve,
+                   st.for_shabbat_holiday,
+                   st.is_special_hourly AS shift_is_special_hourly,
+                   ap.name AS apartment_name,
+                   ap.apartment_type_id,
+                   ap.housing_array_id,
+                   at.hourly_wage_supplement,
+                   at.name AS apartment_type_name,
+                   ha.name AS housing_array_name,
+                   p.is_married,
+                   p.name as person_name
+            FROM time_reports tr
+            LEFT JOIN shift_types st ON st.id = tr.shift_type_id
+            LEFT JOIN apartments ap ON ap.id = tr.apartment_id
+            LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
+            LEFT JOIN housing_arrays ha ON ha.id = ap.housing_array_id
+            LEFT JOIN people p ON p.id = tr.person_id
+            WHERE tr.person_id = ANY(%s) AND tr.date >= %s AND tr.date < %s
+            ORDER BY tr.person_id, tr.date, tr.start_time
+        """, (person_ids, start_date, end_date))
+    all_reports = cursor.fetchall()
+
+    # Group reports by person_id
+    reports_by_person = {}
+    all_shift_ids = set()
+    all_apartment_ids = set()
+    for r in all_reports:
+        reports_by_person.setdefault(r["person_id"], []).append(r)
+        if r["shift_type_id"]:
+            all_shift_ids.add(r["shift_type_id"])
+        if r["apartment_id"]:
+            all_apartment_ids.add(r["apartment_id"])
+
+    # 2. Load ALL shift_time_segments for all used shifts
+    segments_by_shift = {}
+    if all_shift_ids:
+        placeholders = ",".join(["%s"] * len(all_shift_ids))
+        cursor.execute(f"""
+            SELECT seg.*, st.name AS shift_name
+            FROM shift_time_segments seg
+            JOIN shift_types st ON st.id = seg.shift_type_id
+            WHERE seg.shift_type_id IN ({placeholders})
+            ORDER BY seg.shift_type_id, seg.order_index, seg.id
+        """, tuple(all_shift_ids))
+        for seg in cursor.fetchall():
+            segments_by_shift.setdefault(seg["shift_type_id"], []).append(seg)
+
+    # 3. Load ALL payment_components for all people at once
+    month_start = start_dt
+    month_end = end_dt
+    if housing_filter is not None:
+        cursor.execute("""
+            SELECT pc.person_id, (pc.quantity * pc.rate) as total_amount, pc.component_type_id
+            FROM payment_components pc
+            JOIN apartments ap ON ap.id = pc.apartment_id
+            WHERE pc.person_id = ANY(%s) AND pc.date >= %s AND pc.date < %s
+              AND ap.housing_array_id = %s
+        """, (person_ids, month_start, month_end, housing_filter))
+    else:
+        cursor.execute("""
+            SELECT person_id, (quantity * rate) as total_amount, component_type_id
+            FROM payment_components
+            WHERE person_id = ANY(%s) AND date >= %s AND date < %s
+        """, (person_ids, month_start, month_end))
+    all_payment_comps = cursor.fetchall()
+
+    # Group payment_components by person_id
+    payment_comps_by_person = {}
+    for pc in all_payment_comps:
+        payment_comps_by_person.setdefault(pc["person_id"], []).append(pc)
+
     cursor.close()
-    apartment_type_cache = get_all_apartment_types_for_month(conn, all_apartment_ids, year, month)
+
+    # 4. Load apartment type cache and housing rates cache
+    apartment_type_cache = get_all_apartment_types_for_month(conn, list(all_apartment_ids), year, month)
+    housing_rates_cache = get_all_housing_rates_for_month(conn, year, month)
+
+    # Build person start_date map (already have this data from people query)
+    person_start_dates = {p["id"]: p["start_date"] for p in people}
+
+    # ============================================================
+    # END BULK LOADING - Now process each person with cached data
+    # ============================================================
 
     summary_data = []
     grand_totals = {code["internal_key"]: 0 for code in payment_codes}
@@ -229,18 +372,27 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
     for p in people:
         pid = p["id"]
 
-        # Use the unified calculation from app_utils with pre-loaded caches
+        # Use the unified calculation from app_utils with ALL pre-loaded data
         daily_segments, _ = get_daily_segments_data(
             conn_wrapper, pid, year, month, shabbat_cache, minimum_wage,
             person_status_cache=person_status_cache,
-            apartment_type_cache=apartment_type_cache
+            apartment_type_cache=apartment_type_cache,
+            housing_rates_cache=housing_rates_cache,
+            preloaded_reports=reports_by_person.get(pid, []),
+            preloaded_segments=segments_by_shift
         )
 
         monthly_totals = aggregate_daily_segments_to_monthly(
-            conn_wrapper, daily_segments, pid, year, month, minimum_wage
+            conn_wrapper, daily_segments, pid, year, month, minimum_wage,
+            preloaded_payment_comps=payment_comps_by_person.get(pid, []),
+            person_start_date=person_start_dates.get(pid)
         )
 
-        if monthly_totals.get("total_payment", 0) > 0 or monthly_totals.get("total_hours", 0) > 0:
+        # הצג מדריכים עם שעות עבודה או תשלום כלשהו
+        # (כשיש סינון לפי מערך דיור, גם השעות וגם רכיבי התשלום כבר מסוננים)
+        should_include = monthly_totals.get("total_payment", 0) > 0 or monthly_totals.get("total_hours", 0) > 0
+
+        if should_include:
             summary_data.append({"name": p["name"], "person_id": p["id"], "merav_code": p["meirav_code"], "totals": monthly_totals})
 
             grand_totals["payment"] += monthly_totals.get("payment", 0)
