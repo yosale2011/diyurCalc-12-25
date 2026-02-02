@@ -422,6 +422,8 @@ def get_all_housing_rates_for_month(conn, year: int = None, month: int = None) -
     try:
         if year is not None and month is not None:
             # שאילתה עם תמיכה בהיסטוריה
+            # שימוש ב-CASE WHEN במקום COALESCE כי NULL בהיסטוריה = שכר מינימום
+            # COALESCE(NULL, value) מחזיר value, אבל אנחנו רוצים NULL אם יש רשומת היסטוריה
             cursor.execute("""
                 WITH historical AS (
                     SELECT DISTINCT ON (shift_type_id, housing_array_id)
@@ -436,12 +438,12 @@ def get_all_housing_rates_for_month(conn, year: int = None, month: int = None) -
                 SELECT
                     sthr.shift_type_id,
                     sthr.housing_array_id,
-                    COALESCE(h.weekday_single_rate, sthr.weekday_single_rate) as weekday_single_rate,
-                    COALESCE(h.weekday_single_wage_percentage, sthr.weekday_single_wage_percentage) as weekday_single_wage_percentage,
-                    COALESCE(h.weekday_married_rate, sthr.weekday_married_rate) as weekday_married_rate,
-                    COALESCE(h.weekday_married_wage_percentage, sthr.weekday_married_wage_percentage) as weekday_married_wage_percentage,
-                    COALESCE(h.shabbat_rate, sthr.shabbat_rate) as shabbat_rate,
-                    COALESCE(h.shabbat_wage_percentage, sthr.shabbat_wage_percentage) as shabbat_wage_percentage
+                    CASE WHEN h.shift_type_id IS NOT NULL THEN h.weekday_single_rate ELSE sthr.weekday_single_rate END as weekday_single_rate,
+                    CASE WHEN h.shift_type_id IS NOT NULL THEN h.weekday_single_wage_percentage ELSE sthr.weekday_single_wage_percentage END as weekday_single_wage_percentage,
+                    CASE WHEN h.shift_type_id IS NOT NULL THEN h.weekday_married_rate ELSE sthr.weekday_married_rate END as weekday_married_rate,
+                    CASE WHEN h.shift_type_id IS NOT NULL THEN h.weekday_married_wage_percentage ELSE sthr.weekday_married_wage_percentage END as weekday_married_wage_percentage,
+                    CASE WHEN h.shift_type_id IS NOT NULL THEN h.shabbat_rate ELSE sthr.shabbat_rate END as shabbat_rate,
+                    CASE WHEN h.shift_type_id IS NOT NULL THEN h.shabbat_wage_percentage ELSE sthr.shabbat_wage_percentage END as shabbat_wage_percentage
                 FROM shift_type_housing_rates sthr
                 LEFT JOIN historical h ON h.shift_type_id = sthr.shift_type_id
                     AND h.housing_array_id = sthr.housing_array_id

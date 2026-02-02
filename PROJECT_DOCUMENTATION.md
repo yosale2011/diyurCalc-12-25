@@ -171,7 +171,7 @@ diyur003/
 |------|--------|
 | `person_status_history` | מצב אישי (נשוי, סוג עובד) |
 | `apartment_status_history` | סוג דירה |
-| `shift_types_history` | תעריפי משמרות |
+| `shift_type_housing_rates_history` | תעריפי משמרות לפי מערך דיור |
 | `standby_rates_history` | תעריפי כוננות |
 
 ### לוגיקת "Valid Until"

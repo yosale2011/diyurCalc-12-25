@@ -13,6 +13,6 @@ CREATE INDEX IF NOT EXISTS idx_person_status_history_lookup
 CREATE INDEX IF NOT EXISTS idx_apartment_status_history_lookup
     ON apartment_status_history(apartment_id, year, month);
 
--- Index for shift types history lookups
-CREATE INDEX IF NOT EXISTS idx_shift_types_history_lookup
-    ON shift_types_history(shift_type_id, year, month);
+-- Index for shift type housing rates history lookups
+CREATE INDEX IF NOT EXISTS idx_shift_type_housing_rates_history_lookup
+    ON shift_type_housing_rates_history(shift_type_id, housing_array_id, year, month);

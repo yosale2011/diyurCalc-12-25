@@ -6,6 +6,32 @@
 
 ---
 
+## [2.0.23] - 2026-02-02
+
+### שינויים
+- תיקון באג בהיסטוריית תעריפים: NULL בטבלת היסטוריה עכשיו מחזיר שכר מינימום
+- שינוי מ-COALESCE ל-CASE WHEN ב-`get_all_housing_rates_for_month()`
+- קבצים: `core/history.py`
+
+### סיבה
+כשנשמרה רשומת היסטוריה עם ערכי NULL (=שכר מינימום), השאילתה השתמשה ב-`COALESCE(NULL, current_value)` שהחזיר את הערך הנוכחי במקום NULL. עכשיו השאילתה בודקת אם **יש** רשומת היסטוריה - אם כן, משתמשת בערכים שלה (גם אם NULL = שכר מינימום); אם לא, משתמשת בערכים הנוכחיים.
+
+---
+
+## [2.0.22] - 2026-02-02
+
+### שינויים
+- הסרת טבלת `shift_types_history` - הוחלפה לחלוטין ע"י `shift_type_housing_rates_history`
+- מחיקת קובץ `sql/add_wage_percentage_to_history.sql` (לא רלוונטי יותר)
+- עדכון `sql/add_performance_indexes.sql` - שינוי האינדקס לטבלה החדשה `shift_type_housing_rates_history`
+- מיגרציית DB: `sql/drop_shift_types_history_table.sql` - מחיקת הטבלה הישנה מהדאטהבייס
+- קבצים: `sql/add_performance_indexes.sql`, `PROJECT_DOCUMENTATION.md`
+
+### סיבה
+הטבלה `shift_types_history` הייתה שומרת היסטוריה של שדות `rate`, `is_minimum_wage`, `wage_percentage` מטבלת `shift_types`. לאחר המעבר לארכיטקטורה החדשה של תעריפים לפי מערך דיור (`shift_type_housing_rates` + `shift_type_housing_rates_history`), הטבלה הישנה כבר לא בשימוש.
+
+---
+
 ## [2.0.21] - 2026-02-02
 
 ### שינויים
@@ -13,6 +39,7 @@
 - מחיקת פונקציות `save_segment_to_history`, `save_all_segments_to_history` מ-`core/history.py`
 - מחיקת routes: `PUT /api/shift-segment/{segment_id}`, `POST /api/segments-history`
 - מחיקת קובץ `sql/create_segments_history_table.sql`
+- מיגרציית DB: `sql/drop_segments_history_table.sql` - מחיקת הטבלה מהדאטהבייס
 - קבצים: `core/history.py`, `routes/admin.py`, `app.py`, `sql/drop_wage_percent_column.sql`, `PROJECT_DOCUMENTATION.md`
 
 ### סיבה

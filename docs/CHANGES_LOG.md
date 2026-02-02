@@ -173,11 +173,13 @@
 *   רשומות היסטוריה מחליפות את הערכים הנוכחיים עבור חודשים קודמים
 
 #### הערה חשובה
-**השדות והטבלאות הבאים לא נמחקו מ-DB** (אפשר למחוק בעתיד):
+**השדות הבאים לא נמחקו מ-DB** (אפשר למחוק בעתיד):
 *   `shift_types.rate`
 *   `shift_types.is_minimum_wage`
 *   `shift_types.wage_percentage`
-*   טבלה `shift_types_history`
+
+**נמחקו בגרסה 2.0.22:**
+*   טבלה `shift_types_history` - הוחלפה ע"י `shift_type_housing_rates_history`
 
 ---
 
