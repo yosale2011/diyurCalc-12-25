@@ -6,6 +6,20 @@
 
 ---
 
+## [2.0.21] - 2026-02-02
+
+### שינויים
+- הסרת טבלת `shift_time_segments_history` - לא הייתה בשימוש
+- מחיקת פונקציות `save_segment_to_history`, `save_all_segments_to_history` מ-`core/history.py`
+- מחיקת routes: `PUT /api/shift-segment/{segment_id}`, `POST /api/segments-history`
+- מחיקת קובץ `sql/create_segments_history_table.sql`
+- קבצים: `core/history.py`, `routes/admin.py`, `app.py`, `sql/drop_wage_percent_column.sql`, `PROJECT_DOCUMENTATION.md`
+
+### סיבה
+הטבלה והקוד הקשור לא היו בשימוש בפועל במערכת
+
+---
+
 ## [2.0.20] - 2026-01-29
 
 ### שינויים

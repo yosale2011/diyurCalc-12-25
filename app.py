@@ -32,7 +32,6 @@ from routes.admin import (
     manage_payment_codes, update_payment_codes,
     demo_sync_page, sync_demo_database, demo_sync_status,
     get_month_lock_status, lock_month_api, unlock_month_api,
-    update_shift_segment, save_all_segments_history_for_month
 )
 from routes.summary import general_summary
 from routes.export import (
@@ -273,18 +272,6 @@ async def lock_month_route(request: Request):
 async def unlock_month_route(request: Request):
     """Unlock a month."""
     return await unlock_month_api(request)
-
-
-@app.put("/api/shift-segment/{segment_id}")
-async def update_shift_segment_route(request: Request, segment_id: int):
-    """Update shift time segment with history support."""
-    return await update_shift_segment(request, segment_id)
-
-
-@app.post("/api/segments-history")
-async def save_segments_history_route(request: Request):
-    """Save all segments to history for a specific month."""
-    return await save_all_segments_history_for_month(request)
 
 
 @app.get("/summary", response_class=HTMLResponse)
