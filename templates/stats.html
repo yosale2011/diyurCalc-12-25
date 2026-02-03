@@ -1,0 +1,794 @@
+{% extends "base.html" %}
+
+{% block content %}
+<style>
+    /* Modern 2026 Design System */
+    :root {
+        --primary: #6366f1;
+        --primary-dark: #4f46e5;
+        --success: #22c55e;
+        --warning: #f59e0b;
+        --danger: #ef4444;
+        --info: #0ea5e9;
+        --purple: #a855f7;
+        --pink: #ec4899;
+        --gradient-1: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        --gradient-2: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        --gradient-3: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+        --gradient-4: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+        --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+        --shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+        --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1);
+        --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1);
+        --radius: 16px;
+    }
+
+    .stats-page {
+        background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+        min-height: 100vh;
+        padding-bottom: 40px;
+    }
+
+    /* Header Card */
+    .page-header {
+        background: white;
+        border-radius: var(--radius);
+        padding: 24px 28px;
+        margin-bottom: 24px;
+        box-shadow: var(--shadow);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 16px;
+    }
+
+    .page-title {
+        font-size: 28px;
+        font-weight: 700;
+        background: var(--gradient-1);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+        margin: 0;
+    }
+
+    .header-controls {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+    }
+
+    .select-modern {
+        padding: 10px 16px;
+        border: 2px solid #e2e8f0;
+        border-radius: 12px;
+        font-size: 14px;
+        font-weight: 500;
+        background: white;
+        cursor: pointer;
+        transition: all 0.2s;
+        min-width: 120px;
+    }
+
+    .select-modern:hover {
+        border-color: var(--primary);
+    }
+
+    .select-modern:focus {
+        outline: none;
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+    }
+
+    .btn-icon {
+        width: 44px;
+        height: 44px;
+        border-radius: 12px;
+        border: none;
+        background: #f1f5f9;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: all 0.2s;
+        font-size: 18px;
+    }
+
+    .btn-icon:hover {
+        background: var(--primary);
+        color: white;
+        transform: translateY(-2px);
+        box-shadow: var(--shadow);
+    }
+
+    /* Summary Cards */
+    .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 20px;
+        margin-bottom: 28px;
+    }
+
+    @media (max-width: 1200px) {
+        .summary-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 600px) {
+        .summary-grid { grid-template-columns: 1fr; }
+    }
+
+    .summary-card {
+        background: white;
+        border-radius: var(--radius);
+        padding: 24px;
+        box-shadow: var(--shadow);
+        position: relative;
+        overflow: hidden;
+        transition: all 0.3s ease;
+    }
+
+    .summary-card:hover {
+        transform: translateY(-4px);
+        box-shadow: var(--shadow-xl);
+    }
+
+    .summary-card::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 100px;
+        height: 100px;
+        border-radius: 50%;
+        opacity: 0.1;
+        transform: translate(30%, -30%);
+    }
+
+    .summary-card.blue::before { background: var(--primary); }
+    .summary-card.green::before { background: var(--success); }
+    .summary-card.orange::before { background: var(--warning); }
+    .summary-card.purple::before { background: var(--purple); }
+
+    .card-icon {
+        width: 48px;
+        height: 48px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 24px;
+        margin-bottom: 16px;
+    }
+
+    .summary-card.blue .card-icon { background: rgba(99, 102, 241, 0.1); color: var(--primary); }
+    .summary-card.green .card-icon { background: rgba(34, 197, 94, 0.1); color: var(--success); }
+    .summary-card.orange .card-icon { background: rgba(245, 158, 11, 0.1); color: var(--warning); }
+    .summary-card.purple .card-icon { background: rgba(168, 85, 247, 0.1); color: var(--purple); }
+
+    .card-value {
+        font-size: 32px;
+        font-weight: 700;
+        color: #1e293b;
+        margin-bottom: 4px;
+        font-feature-settings: 'tnum';
+    }
+
+    .card-label {
+        font-size: 14px;
+        color: #64748b;
+        font-weight: 500;
+    }
+
+    /* Analysis Selector */
+    .analysis-bar {
+        background: white;
+        border-radius: var(--radius);
+        padding: 16px 24px;
+        margin-bottom: 24px;
+        box-shadow: var(--shadow);
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+
+    .analysis-chip {
+        padding: 10px 20px;
+        border-radius: 100px;
+        border: 2px solid transparent;
+        background: #f1f5f9;
+        font-size: 14px;
+        font-weight: 500;
+        color: #475569;
+        cursor: pointer;
+        transition: all 0.2s;
+        white-space: nowrap;
+    }
+
+    .analysis-chip:hover {
+        background: #e2e8f0;
+    }
+
+    .analysis-chip.active {
+        background: var(--primary);
+        color: white;
+        border-color: var(--primary);
+    }
+
+    /* Charts Grid */
+    .charts-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 24px;
+    }
+
+    @media (max-width: 900px) {
+        .charts-grid { grid-template-columns: 1fr; }
+    }
+
+    .chart-card {
+        background: white;
+        border-radius: var(--radius);
+        padding: 24px;
+        box-shadow: var(--shadow);
+        transition: all 0.3s ease;
+    }
+
+    .chart-card:hover {
+        box-shadow: var(--shadow-lg);
+    }
+
+    .chart-card.full-width {
+        grid-column: 1 / -1;
+    }
+
+    .chart-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 20px;
+        flex-wrap: wrap;
+        gap: 12px;
+    }
+
+    .chart-title {
+        font-size: 18px;
+        font-weight: 600;
+        color: #1e293b;
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .chart-title-icon {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        background: var(--gradient-1);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-size: 16px;
+    }
+
+    .chart-controls {
+        display: flex;
+        gap: 4px;
+        background: #f1f5f9;
+        padding: 4px;
+        border-radius: 10px;
+    }
+
+    .chart-type-btn {
+        padding: 8px 16px;
+        border: none;
+        background: transparent;
+        border-radius: 8px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 500;
+        color: #64748b;
+        transition: all 0.2s;
+    }
+
+    .chart-type-btn:hover {
+        color: #1e293b;
+    }
+
+    .chart-type-btn.active {
+        background: white;
+        color: var(--primary);
+        box-shadow: var(--shadow-sm);
+    }
+
+    .chart-wrapper {
+        position: relative;
+        height: 320px;
+    }
+
+    .loading-overlay {
+        position: absolute;
+        inset: 0;
+        background: rgba(255,255,255,0.9);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 10;
+        border-radius: 12px;
+    }
+
+    .spinner {
+        width: 44px;
+        height: 44px;
+        border: 3px solid #e2e8f0;
+        border-top-color: var(--primary);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+
+    /* Comparison Section */
+    .comparison-section {
+        background: white;
+        border-radius: var(--radius);
+        padding: 28px;
+        box-shadow: var(--shadow);
+        margin-top: 24px;
+    }
+
+    .comparison-title {
+        font-size: 20px;
+        font-weight: 600;
+        color: #1e293b;
+        margin: 0 0 20px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+
+    .compare-controls {
+        display: flex;
+        gap: 20px;
+        flex-wrap: wrap;
+        align-items: flex-end;
+        margin-bottom: 24px;
+        padding: 20px;
+        background: #f8fafc;
+        border-radius: 12px;
+    }
+
+    .compare-group {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    .compare-group label {
+        font-size: 13px;
+        font-weight: 600;
+        color: #64748b;
+    }
+
+    .btn-compare {
+        padding: 12px 28px;
+        background: var(--gradient-1);
+        color: white;
+        border: none;
+        border-radius: 12px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+        box-shadow: 0 4px 14px rgba(99, 102, 241, 0.3);
+    }
+
+    .btn-compare:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(99, 102, 241, 0.4);
+    }
+
+    /* Empty State */
+    .empty-state {
+        text-align: center;
+        padding: 60px 20px;
+        color: #94a3b8;
+    }
+
+    .empty-state-icon {
+        font-size: 48px;
+        margin-bottom: 16px;
+    }
+
+    /* Print Styles */
+    @media print {
+        .page-header, .analysis-bar, .chart-controls, .comparison-section { display: none !important; }
+        .chart-card { break-inside: avoid; box-shadow: none; border: 1px solid #e2e8f0; }
+        .summary-card { box-shadow: none; border: 1px solid #e2e8f0; }
+    }
+
+    /* Animations */
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .chart-card, .summary-card {
+        animation: fadeIn 0.4s ease-out;
+    }
+
+    .summary-grid .summary-card:nth-child(1) { animation-delay: 0.05s; }
+    .summary-grid .summary-card:nth-child(2) { animation-delay: 0.1s; }
+    .summary-grid .summary-card:nth-child(3) { animation-delay: 0.15s; }
+    .summary-grid .summary-card:nth-child(4) { animation-delay: 0.2s; }
+</style>
+
+<div class="stats-page">
+    <!-- Header -->
+    <div class="page-header">
+        <h1 class="page-title">סטטיסטיקות ודוחות</h1>
+        <div class="header-controls">
+            <form method="get" id="date-form" style="display: flex; gap: 10px;">
+                <select name="month" class="select-modern" onchange="document.getElementById('date-form').submit()">
+                    {% for m in months %}
+                    <option value="{{ m.month }}" data-year="{{ m.year }}"
+                            {% if m.month == selected_month and m.year == selected_year %}selected{% endif %}>
+                        {{ m.label }}
+                    </option>
+                    {% endfor %}
+                </select>
+                <select name="year" class="select-modern" onchange="document.getElementById('date-form').submit()">
+                    {% for y in years %}
+                    <option value="{{ y }}" {% if y == selected_year %}selected{% endif %}>{{ y }}</option>
+                    {% endfor %}
+                </select>
+            </form>
+            <button class="btn-icon" onclick="window.print()" title="הדפסה">🖨️</button>
+        </div>
+    </div>
+
+    <!-- Summary Cards -->
+    <div class="summary-grid">
+        <div class="summary-card blue">
+            <div class="card-icon">💰</div>
+            <div class="card-value" id="total-salary">-</div>
+            <div class="card-label">שכר כולל</div>
+        </div>
+        <div class="summary-card green">
+            <div class="card-icon">⏱️</div>
+            <div class="card-value" id="total-hours">-</div>
+            <div class="card-label">שעות עבודה</div>
+        </div>
+        <div class="summary-card orange">
+            <div class="card-icon">👥</div>
+            <div class="card-value" id="total-guides">-</div>
+            <div class="card-label">מדריכים פעילים</div>
+        </div>
+        <div class="summary-card purple">
+            <div class="card-icon">🔔</div>
+            <div class="card-value" id="total-standby">-</div>
+            <div class="card-label">תשלום כוננויות</div>
+        </div>
+    </div>
+
+    <!-- Analysis Selector -->
+    <div class="analysis-bar">
+        <div class="analysis-chip active" data-analysis="overview" onclick="changeAnalysis('overview', this)">📊 סקירה כללית</div>
+        <div class="analysis-chip" data-analysis="by-housing" onclick="changeAnalysis('by-housing', this)">🏠 שכר לפי מערך</div>
+        <div class="analysis-chip" data-analysis="by-guide" onclick="changeAnalysis('by-guide', this)">👤 שכר לפי מדריך</div>
+        <div class="analysis-chip" data-analysis="hours-dist" onclick="changeAnalysis('hours-dist', this)">⏰ התפלגות שעות</div>
+        <div class="analysis-chip" data-analysis="extras" onclick="changeAnalysis('extras', this)">📋 כוננויות ותוספות</div>
+        <div class="analysis-chip" data-analysis="shift-types" onclick="changeAnalysis('shift-types', this)">📅 סוגי משמרות</div>
+        <div class="analysis-chip" data-analysis="trends" onclick="changeAnalysis('trends', this)">📈 מגמות</div>
+        <div class="analysis-chip" data-analysis="compare" onclick="changeAnalysis('compare', this)">⚖️ השוואה</div>
+    </div>
+
+    <!-- Charts Grid -->
+    <div class="charts-grid" id="charts-container">
+        <!-- Charts will be inserted here -->
+    </div>
+
+    <!-- Comparison Section -->
+    <div id="comparison-section" class="comparison-section" style="display: none;">
+        <h3 class="comparison-title">⚖️ השוואת חודשים</h3>
+        <div class="compare-controls">
+            <div class="compare-group">
+                <label>חודש ראשון</label>
+                <select id="compare-month1" class="select-modern">
+                    {% for m in months %}
+                    <option value="{{ m.year }}-{{ m.month }}" {% if loop.index == 1 %}selected{% endif %}>{{ m.label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="compare-group">
+                <label>חודש שני</label>
+                <select id="compare-month2" class="select-modern">
+                    {% for m in months %}
+                    <option value="{{ m.year }}-{{ m.month }}" {% if loop.index == 2 %}selected{% endif %}>{{ m.label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button class="btn-compare" onclick="loadComparison()">השווה עכשיו</button>
+        </div>
+        <div class="chart-card">
+            <div class="chart-wrapper">
+                <canvas id="comparisonChart"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script>
+const selectedYear = {{ selected_year }};
+const selectedMonth = {{ selected_month }};
+let charts = {};
+let chartTypes = {};
+
+// Format helpers
+function formatCurrency(num) {
+    return new Intl.NumberFormat('he-IL', {
+        style: 'currency',
+        currency: 'ILS',
+        minimumFractionDigits: 0,
+        maximumFractionDigits: 0
+    }).format(num);
+}
+
+function formatNumber(num) {
+    return new Intl.NumberFormat('he-IL').format(Math.round(num));
+}
+
+// Chart card generator
+function createChartCard(id, title, icon, fullWidth = false, showToggle = true) {
+    const toggleHtml = showToggle ? `
+        <div class="chart-controls">
+            <button class="chart-type-btn active" data-chart="${id}" data-type="bar" onclick="toggleChartType('${id}', 'bar')">עמודות</button>
+            <button class="chart-type-btn" data-chart="${id}" data-type="line" onclick="toggleChartType('${id}', 'line')">קו</button>
+        </div>
+    ` : '';
+
+    return `
+        <div class="chart-card ${fullWidth ? 'full-width' : ''}" id="card-${id}">
+            <div class="chart-header">
+                <h3 class="chart-title">
+                    <span class="chart-title-icon">${icon}</span>
+                    ${title}
+                </h3>
+                ${toggleHtml}
+            </div>
+            <div class="chart-wrapper">
+                <div class="loading-overlay" id="loading-${id}">
+                    <div class="spinner"></div>
+                </div>
+                <canvas id="chart-${id}"></canvas>
+            </div>
+        </div>
+    `;
+}
+
+function toggleChartType(chartId, type) {
+    chartTypes[chartId] = type;
+    document.querySelectorAll(`[data-chart="${chartId}"]`).forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.type === type);
+    });
+
+    if (charts[chartId]) {
+        const chartData = charts[chartId].data;
+        const options = charts[chartId].options;
+        charts[chartId].destroy();
+
+        const ctx = document.getElementById(`chart-${chartId}`).getContext('2d');
+        charts[chartId] = new Chart(ctx, { type, data: chartData, options });
+    }
+}
+
+function hideLoading(chartId) {
+    const el = document.getElementById(`loading-${chartId}`);
+    if (el) el.style.display = 'none';
+}
+
+// Modern chart config
+function getChartConfig(type = 'bar') {
+    return {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: {
+                position: 'top',
+                rtl: true,
+                labels: {
+                    padding: 20,
+                    font: { family: 'Segoe UI, sans-serif', size: 12 },
+                    usePointStyle: true
+                }
+            },
+            tooltip: {
+                rtl: true,
+                backgroundColor: '#1e293b',
+                padding: 12,
+                cornerRadius: 8,
+                titleFont: { size: 14 },
+                bodyFont: { size: 13 },
+                callbacks: {
+                    label: ctx => `${ctx.dataset.label}: ${formatNumber(ctx.parsed.y || ctx.parsed)}`
+                }
+            }
+        },
+        scales: type !== 'doughnut' && type !== 'pie' ? {
+            x: {
+                reverse: true,
+                grid: { display: false },
+                ticks: { font: { family: 'Segoe UI, sans-serif' } }
+            },
+            y: {
+                grid: { color: '#f1f5f9' },
+                ticks: {
+                    font: { family: 'Segoe UI, sans-serif' },
+                    callback: v => formatNumber(v)
+                }
+            }
+        } : {}
+    };
+}
+
+async function loadChart(chartId, endpoint, type = 'bar', customOptions = {}) {
+    try {
+        const res = await fetch(`/api/stats/${endpoint}?year=${selectedYear}&month=${selectedMonth}`);
+        const data = await res.json();
+        hideLoading(chartId);
+
+        const ctx = document.getElementById(`chart-${chartId}`).getContext('2d');
+        if (charts[chartId]) charts[chartId].destroy();
+
+        const finalType = chartTypes[chartId] || type;
+        charts[chartId] = new Chart(ctx, {
+            type: finalType,
+            data: data,
+            options: { ...getChartConfig(finalType), ...customOptions }
+        });
+        chartTypes[chartId] = finalType;
+    } catch (err) {
+        console.error(`Error loading ${chartId}:`, err);
+        hideLoading(chartId);
+    }
+}
+
+async function loadSummaryData() {
+    try {
+        const res = await fetch(`/api/stats/by-guide?year=${selectedYear}&month=${selectedMonth}`);
+        const data = await res.json();
+
+        // חישוב סיכומים מהנתונים
+        const totalSalary = data.datasets[0].data.reduce((a, b) => a + b, 0);
+        const totalGuides = data.labels.length;
+
+        document.getElementById('total-salary').textContent = formatCurrency(totalSalary);
+        document.getElementById('total-guides').textContent = totalGuides;
+
+        // טעינת נתוני שעות
+        const hoursRes = await fetch(`/api/stats/hours-distribution?year=${selectedYear}&month=${selectedMonth}`);
+        const hoursData = await hoursRes.json();
+        const totalHours = hoursData.datasets[0].data.reduce((a, b) => a + b, 0);
+        document.getElementById('total-hours').textContent = formatNumber(totalHours);
+
+        // טעינת כוננויות
+        const extrasRes = await fetch(`/api/stats/extras-distribution?year=${selectedYear}&month=${selectedMonth}`);
+        const extrasData = await extrasRes.json();
+        const standbyIndex = extrasData.labels.indexOf('כוננויות');
+        const totalStandby = standbyIndex >= 0 ? extrasData.datasets[0].data[standbyIndex] : 0;
+        document.getElementById('total-standby').textContent = formatCurrency(totalStandby);
+    } catch (err) {
+        console.error('Error loading summary:', err);
+    }
+}
+
+function changeAnalysis(analysis, element) {
+    // Update chips
+    document.querySelectorAll('.analysis-chip').forEach(c => c.classList.remove('active'));
+    if (element) element.classList.add('active');
+
+    const container = document.getElementById('charts-container');
+    const comparison = document.getElementById('comparison-section');
+    comparison.style.display = 'none';
+
+    Object.values(charts).forEach(c => c?.destroy());
+    charts = {};
+
+    switch(analysis) {
+        case 'overview':
+            container.innerHTML =
+                createChartCard('housing', 'שכר לפי מערך דיור', '🏠') +
+                createChartCard('hours', 'התפלגות שעות', '⏰', false, false) +
+                createChartCard('extras', 'כוננויות ותוספות', '📋') +
+                createChartCard('trends', 'מגמות חודשיות', '📈', true);
+
+            loadChart('housing', 'by-housing');
+            loadChart('hours', 'hours-distribution', 'doughnut');
+            loadChart('extras', 'extras-distribution');
+            loadChart('trends', 'monthly-trends', 'line', {
+                scales: {
+                    x: { reverse: true, grid: { display: false } },
+                    y: { position: 'right', title: { display: true, text: 'שכר (ש"ח)' }, grid: { color: '#f1f5f9' } },
+                    y1: { position: 'left', title: { display: true, text: 'שעות' }, grid: { drawOnChartArea: false } }
+                }
+            });
+            break;
+
+        case 'by-housing':
+            container.innerHTML = createChartCard('housing', 'שכר לפי מערך דיור', '🏠', true);
+            loadChart('housing', 'by-housing');
+            break;
+
+        case 'by-guide':
+            container.innerHTML = createChartCard('guides', 'שכר לפי מדריך (Top 20)', '👤', true);
+            loadChart('guides', 'by-guide');
+            break;
+
+        case 'hours-dist':
+            container.innerHTML = createChartCard('hours', 'התפלגות שעות לפי אחוזים', '⏰', true, false);
+            loadChart('hours', 'hours-distribution', 'doughnut');
+            break;
+
+        case 'extras':
+            container.innerHTML = createChartCard('extras', 'כוננויות, חופשות ותוספות', '📋', true);
+            loadChart('extras', 'extras-distribution');
+            break;
+
+        case 'shift-types':
+            container.innerHTML = createChartCard('shifts', 'התפלגות סוגי משמרות', '📅', true, false);
+            loadChart('shifts', 'shift-types', 'doughnut');
+            break;
+
+        case 'trends':
+            container.innerHTML = createChartCard('trends', 'מגמות חודשיות (6 חודשים)', '📈', true);
+            loadChart('trends', 'monthly-trends', 'line', {
+                scales: {
+                    x: { reverse: true, grid: { display: false } },
+                    y: { position: 'right', title: { display: true, text: 'שכר (ש"ח)' }, grid: { color: '#f1f5f9' } },
+                    y1: { position: 'left', title: { display: true, text: 'שעות' }, grid: { drawOnChartArea: false } }
+                }
+            });
+            break;
+
+        case 'compare':
+            container.innerHTML = '';
+            comparison.style.display = 'block';
+            break;
+    }
+}
+
+async function loadComparison() {
+    const [y1, m1] = document.getElementById('compare-month1').value.split('-');
+    const [y2, m2] = document.getElementById('compare-month2').value.split('-');
+
+    try {
+        const res = await fetch(`/api/stats/comparison?year1=${y1}&month1=${m1}&year2=${y2}&month2=${m2}`);
+        const data = await res.json();
+
+        const ctx = document.getElementById('comparisonChart').getContext('2d');
+        if (charts['comparison']) charts['comparison'].destroy();
+
+        charts['comparison'] = new Chart(ctx, {
+            type: 'bar',
+            data: data,
+            options: getChartConfig('bar')
+        });
+    } catch (err) {
+        console.error('Error loading comparison:', err);
+    }
+}
+
+// Initialize
+document.addEventListener('DOMContentLoaded', () => {
+    loadSummaryData();
+    changeAnalysis('overview', document.querySelector('.analysis-chip.active'));
+});
+</script>
+{% endblock %}

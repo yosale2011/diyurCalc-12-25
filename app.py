@@ -52,6 +52,17 @@ from routes.email import (
     send_guide_email_route,
     send_all_guides_email_route,
 )
+from routes.stats import (
+    stats_page,
+    get_salary_by_housing_array,
+    get_salary_by_guide,
+    get_hours_distribution,
+    get_extras_distribution,
+    get_monthly_trends,
+    get_comparison_data,
+    get_shift_types_distribution,
+    get_all_stats,
+)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -319,6 +330,61 @@ def export_gesher_preview_route(request: Request, year: int = None, month: int =
 def export_excel_route(year: int = None, month: int = None):
     """Export monthly summary to Excel."""
     return export_excel(year, month)
+
+
+# Statistics routes
+@app.get("/stats", response_class=HTMLResponse)
+def stats_route(request: Request, year: int = None, month: int = None):
+    """Statistics dashboard page."""
+    return stats_page(request, year, month)
+
+
+@app.get("/api/stats/by-housing")
+def stats_by_housing_route(year: int, month: int):
+    """Get salary by housing array."""
+    return get_salary_by_housing_array(year, month)
+
+
+@app.get("/api/stats/by-guide")
+def stats_by_guide_route(year: int, month: int, limit: int = 20):
+    """Get salary by guide."""
+    return get_salary_by_guide(year, month, limit)
+
+
+@app.get("/api/stats/hours-distribution")
+def stats_hours_distribution_route(year: int, month: int):
+    """Get hours distribution."""
+    return get_hours_distribution(year, month)
+
+
+@app.get("/api/stats/extras-distribution")
+def stats_extras_distribution_route(year: int, month: int):
+    """Get extras distribution (standby, vacation, sick)."""
+    return get_extras_distribution(year, month)
+
+
+@app.get("/api/stats/monthly-trends")
+def stats_monthly_trends_route(year: int, months_back: int = 6):
+    """Get monthly trends."""
+    return get_monthly_trends(year, months_back)
+
+
+@app.get("/api/stats/comparison")
+def stats_comparison_route(year1: int, month1: int, year2: int, month2: int):
+    """Get comparison data between two months."""
+    return get_comparison_data(year1, month1, year2, month2)
+
+
+@app.get("/api/stats/shift-types")
+def stats_shift_types_route(year: int, month: int):
+    """Get shift types distribution."""
+    return get_shift_types_distribution(year, month)
+
+
+@app.get("/api/stats/all")
+def stats_all_route(year: int, month: int):
+    """Get all stats data in one call - faster loading."""
+    return get_all_stats(year, month)
 
 
 # Email routes
