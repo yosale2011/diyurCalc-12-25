@@ -33,7 +33,6 @@ TABLES_ORDER = [
     "payment_component_types",
     "payment_components",
     "people",
-    "person_roles",
     "person_apartments",
     "guide_apartments",
     "guide_fixed_payments",

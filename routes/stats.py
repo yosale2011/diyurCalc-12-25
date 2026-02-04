@@ -478,3 +478,548 @@ def get_shift_types_distribution(year: int, month: int) -> JSONResponse:
             "backgroundColor": _generate_colors(len(data))
         }]
     })
+
+
+# =============================================================================
+# APIs חדשים לדשבורד מורחב
+# =============================================================================
+
+
+def _aggregate_by_apartment(summary_data: List, year: int, month: int) -> dict:
+    """
+    אגרגציה של נתוני סיכום לפי דירה.
+
+    Returns:
+        dict: {apartment_id: {name, housing_array_id, housing_array_name, totals}}
+    """
+    from collections import defaultdict
+
+    with get_conn() as conn:
+        # שליפת כל הדירות עם מערך הדיור שלהן
+        apartments = {}
+        rows = conn.execute("""
+            SELECT ap.id, ap.name, ap.housing_array_id, ha.name as housing_array_name
+            FROM apartments ap
+            LEFT JOIN housing_arrays ha ON ha.id = ap.housing_array_id
+        """).fetchall()
+        for r in rows:
+            apartments[r["id"]] = {
+                "name": r["name"],
+                "housing_array_id": r["housing_array_id"],
+                "housing_array_name": r["housing_array_name"] or "ללא מערך"
+            }
+
+        # שליפת קישור מדריך+דירה -> תשלומים מפורטים
+        # צריך לשלוף את הדיווחים עצמם כדי לדעת איזה תשלום שייך לאיזו דירה
+        reports = conn.execute("""
+            SELECT tr.person_id, tr.apartment_id
+            FROM time_reports tr
+            WHERE EXTRACT(YEAR FROM tr.date) = %s
+              AND EXTRACT(MONTH FROM tr.date) = %s
+        """, (year, month)).fetchall()
+
+    # מיפוי מדריך -> דירות
+    person_apartments = defaultdict(set)
+    for r in reports:
+        person_apartments[r["person_id"]].add(r["apartment_id"])
+
+    # אגרגציה לפי דירה
+    apartment_totals = defaultdict(lambda: {
+        "total_payment": 0,
+        "total_hours": 0,
+        "calc100": 0, "calc125": 0, "calc150": 0, "calc175": 0, "calc200": 0,
+        "standby_payment": 0,
+        "guides_count": 0
+    })
+
+    for person in summary_data:
+        person_id = person["person_id"]
+        totals = person["totals"]
+        person_apts = person_apartments.get(person_id, set())
+
+        if not person_apts:
+            continue
+
+        # חלוקה שווה בין הדירות של המדריך (אם עבד ביותר מדירה אחת)
+        apt_count = len(person_apts)
+        for apt_id in person_apts:
+            apartment_totals[apt_id]["total_payment"] += totals.get("total_payment", 0) / apt_count
+            apartment_totals[apt_id]["total_hours"] += totals.get("total_hours", 0) / apt_count
+            apartment_totals[apt_id]["calc100"] += totals.get("calc100", 0) / apt_count
+            apartment_totals[apt_id]["calc125"] += totals.get("calc125", 0) / apt_count
+            apartment_totals[apt_id]["calc150"] += totals.get("calc150", 0) / apt_count
+            apartment_totals[apt_id]["calc175"] += totals.get("calc175", 0) / apt_count
+            apartment_totals[apt_id]["calc200"] += totals.get("calc200", 0) / apt_count
+            apartment_totals[apt_id]["standby_payment"] += totals.get("standby_payment", 0) / apt_count
+            apartment_totals[apt_id]["guides_count"] += 1
+
+    # בניית התוצאה הסופית
+    result = {}
+    for apt_id, totals in apartment_totals.items():
+        if apt_id in apartments:
+            result[apt_id] = {
+                **apartments[apt_id],
+                "totals": totals
+            }
+
+    return result
+
+
+def get_compare_housing_arrays(
+    year: int,
+    month: int,
+    array_ids: List[int]
+) -> JSONResponse:
+    """
+    השוואת 2-5 מערכי דיור - שכר ב-2 החודשים האחרונים.
+
+    Args:
+        year: שנה נבחרת
+        month: חודש נבחר
+        array_ids: רשימת מזהי מערכי דיור להשוואה (2-5)
+    """
+    from collections import defaultdict
+
+    if not array_ids or len(array_ids) < 2:
+        return JSONResponse({"error": "יש לבחור לפחות 2 מערכי דיור"}, status_code=400)
+    if len(array_ids) > 5:
+        array_ids = array_ids[:5]
+
+    # חישוב החודש הקודם
+    prev_month = month - 1
+    prev_year = year
+    if prev_month <= 0:
+        prev_month = 12
+        prev_year -= 1
+
+    with get_conn() as conn:
+        # שליפת שמות המערכים
+        array_names = {}
+        placeholders = ",".join(["%s"] * len(array_ids))
+        rows = conn.execute(f"""
+            SELECT id, name FROM housing_arrays WHERE id IN ({placeholders})
+        """, tuple(array_ids)).fetchall()
+        for r in rows:
+            array_names[r["id"]] = r["name"]
+
+        # שליפת קישור מדריך -> מערך לשני החודשים
+        def get_person_to_housing(y: int, m: int) -> dict:
+            rows = conn.execute("""
+                SELECT DISTINCT tr.person_id, ap.housing_array_id
+                FROM time_reports tr
+                JOIN apartments ap ON ap.id = tr.apartment_id
+                WHERE EXTRACT(YEAR FROM tr.date) = %s
+                  AND EXTRACT(MONTH FROM tr.date) = %s
+                  AND ap.housing_array_id = ANY(%s)
+            """, (y, m, array_ids)).fetchall()
+            return {r["person_id"]: r["housing_array_id"] for r in rows}
+
+    # סיכומים לכל חודש
+    summary_curr, _ = _get_cached_summary(year, month)
+    summary_prev, _ = _get_cached_summary(prev_year, prev_month)
+
+    person_to_housing_curr = get_person_to_housing(year, month)
+    person_to_housing_prev = get_person_to_housing(prev_year, prev_month)
+
+    # אגרגציה לפי מערך
+    def aggregate_by_array(summary_data: List, person_to_housing: dict) -> dict:
+        totals = defaultdict(float)
+        for person in summary_data:
+            pid = person["person_id"]
+            if pid in person_to_housing:
+                hid = person_to_housing[pid]
+                totals[hid] += person["totals"].get("total_payment", 0)
+        return totals
+
+    totals_curr = aggregate_by_array(summary_curr, person_to_housing_curr)
+    totals_prev = aggregate_by_array(summary_prev, person_to_housing_prev)
+
+    # בניית הנתונים לגרף
+    labels = [array_names.get(aid, f"מערך {aid}") for aid in array_ids]
+    data_curr = [totals_curr.get(aid, 0) for aid in array_ids]
+    data_prev = [totals_prev.get(aid, 0) for aid in array_ids]
+
+    return JSONResponse({
+        "labels": labels,
+        "datasets": [
+            {
+                "label": f"{month:02d}/{year}",
+                "data": data_curr,
+                "backgroundColor": "#1f6feb"
+            },
+            {
+                "label": f"{prev_month:02d}/{prev_year}",
+                "data": data_prev,
+                "backgroundColor": "#10B981"
+            }
+        ]
+    })
+
+
+def get_top_apartments_by_percent(
+    year: int,
+    month: int,
+    percent: int = 100,
+    limit: int = 10
+) -> JSONResponse:
+    """
+    Top 10 דירות עם הכי הרבה שכר באחוז מסוים.
+
+    Args:
+        year: שנה
+        month: חודש
+        percent: אחוז לסינון (100/125/150/175/200)
+        limit: מספר דירות להציג
+    """
+    summary_data, _ = _get_cached_summary(year, month)
+    apartment_data = _aggregate_by_apartment(summary_data, year, month)
+
+    # מיפוי אחוז לשדה
+    percent_field = f"calc{percent}"
+    if percent_field not in ["calc100", "calc125", "calc150", "calc175", "calc200"]:
+        percent_field = "calc100"
+
+    # מיון לפי השדה הנבחר
+    sorted_apartments = sorted(
+        apartment_data.items(),
+        key=lambda x: x[1]["totals"].get(percent_field, 0),
+        reverse=True
+    )[:limit]
+
+    labels = [apt["name"] for _, apt in sorted_apartments]
+    data = [apt["totals"].get(percent_field, 0) / 60 for _, apt in sorted_apartments]  # המרה לשעות
+
+    return JSONResponse({
+        "labels": labels,
+        "datasets": [{
+            "label": f"שעות {percent}%",
+            "data": [round(d, 1) for d in data],
+            "backgroundColor": "#8B5CF6"
+        }]
+    })
+
+
+def get_apartments_in_array(
+    year: int,
+    month: int,
+    housing_array_id: int
+) -> JSONResponse:
+    """
+    כל הדירות במערך דיור מסוים - סך השכר.
+
+    Args:
+        year: שנה
+        month: חודש
+        housing_array_id: מזהה מערך דיור
+    """
+    summary_data, _ = _get_cached_summary(year, month)
+    apartment_data = _aggregate_by_apartment(summary_data, year, month)
+
+    # סינון לפי מערך דיור
+    filtered = {
+        apt_id: apt
+        for apt_id, apt in apartment_data.items()
+        if apt["housing_array_id"] == housing_array_id
+    }
+
+    # מיון לפי שכר
+    sorted_apartments = sorted(
+        filtered.items(),
+        key=lambda x: x[1]["totals"].get("total_payment", 0),
+        reverse=True
+    )
+
+    labels = [apt["name"] for _, apt in sorted_apartments]
+    data = [apt["totals"].get("total_payment", 0) for _, apt in sorted_apartments]
+
+    return JSONResponse({
+        "labels": labels,
+        "datasets": [{
+            "label": "שכר כולל (ש\"ח)",
+            "data": [round(d, 2) for d in data],
+            "backgroundColor": _generate_colors(len(data))
+        }]
+    })
+
+
+def get_apartments_in_array_by_percent(
+    year: int,
+    month: int,
+    housing_array_id: int
+) -> JSONResponse:
+    """
+    כל הדירות במערך דיור - פילוח לפי אחוזים.
+
+    Args:
+        year: שנה
+        month: חודש
+        housing_array_id: מזהה מערך דיור
+    """
+    summary_data, _ = _get_cached_summary(year, month)
+    apartment_data = _aggregate_by_apartment(summary_data, year, month)
+
+    # סינון לפי מערך דיור
+    filtered = {
+        apt_id: apt
+        for apt_id, apt in apartment_data.items()
+        if apt["housing_array_id"] == housing_array_id
+    }
+
+    # מיון לפי שכר כולל
+    sorted_apartments = sorted(
+        filtered.items(),
+        key=lambda x: x[1]["totals"].get("total_payment", 0),
+        reverse=True
+    )
+
+    labels = [apt["name"] for _, apt in sorted_apartments]
+
+    # בניית datasets לכל אחוז
+    datasets = []
+    percent_colors = {
+        100: "#4CAF50",
+        125: "#8BC34A",
+        150: "#FFC107",
+        175: "#FF5722",
+        200: "#E91E63"
+    }
+
+    for percent in [100, 125, 150, 175, 200]:
+        field = f"calc{percent}"
+        data = [apt["totals"].get(field, 0) / 60 for _, apt in sorted_apartments]
+        # רק אם יש נתונים
+        if sum(data) > 0:
+            datasets.append({
+                "label": f"{percent}%",
+                "data": [round(d, 1) for d in data],
+                "backgroundColor": percent_colors[percent]
+            })
+
+    return JSONResponse({
+        "labels": labels,
+        "datasets": datasets
+    })
+
+
+def get_apartment_details(
+    year: int,
+    month: int,
+    apartment_id: int
+) -> JSONResponse:
+    """
+    פרטי דירה - שעות ושכר לפי סוג משמרת + מדריכים.
+
+    Args:
+        year: שנה
+        month: חודש
+        apartment_id: מזהה דירה
+    """
+    with get_conn() as conn:
+        # שליפת שם הדירה
+        apt_row = conn.execute(
+            "SELECT name FROM apartments WHERE id = %s", (apartment_id,)
+        ).fetchone()
+        apartment_name = apt_row["name"] if apt_row else f"דירה {apartment_id}"
+
+        # שליפת כל המדריכים שעבדו בדירה בחודש
+        guides = conn.execute("""
+            SELECT DISTINCT p.id, p.name
+            FROM time_reports tr
+            JOIN people p ON p.id = tr.person_id
+            WHERE tr.apartment_id = %s
+              AND EXTRACT(YEAR FROM tr.date) = %s
+              AND EXTRACT(MONTH FROM tr.date) = %s
+            ORDER BY p.name
+        """, (apartment_id, year, month)).fetchall()
+
+        # שליפת סוגי משמרות בדירה
+        shift_types = conn.execute("""
+            SELECT st.id, st.name, COUNT(*) as count,
+                   SUM(EXTRACT(EPOCH FROM (tr.end_time - tr.start_time))/60) as total_minutes
+            FROM time_reports tr
+            JOIN shift_types st ON st.id = tr.shift_type_id
+            WHERE tr.apartment_id = %s
+              AND EXTRACT(YEAR FROM tr.date) = %s
+              AND EXTRACT(MONTH FROM tr.date) = %s
+            GROUP BY st.id, st.name
+            ORDER BY count DESC
+        """, (apartment_id, year, month)).fetchall()
+
+    # נתוני משמרות
+    shift_labels = [s["name"] for s in shift_types]
+    shift_hours = [round((s["total_minutes"] or 0) / 60, 1) for s in shift_types]
+    shift_counts = [s["count"] for s in shift_types]
+
+    # נתוני מדריכים - שימוש ב-summary הקיים
+    guide_labels = [g["name"] for g in guides]
+    guide_salaries = []
+
+    summary_data, _ = _get_cached_summary(year, month)
+
+    for guide in guides:
+        for person in summary_data:
+            if person["person_id"] == guide["id"]:
+                # הערכה - חלק יחסי מהשכר (אם עבד ביותר מדירה אחת)
+                guide_salaries.append(person["totals"].get("total_payment", 0))
+                break
+        else:
+            guide_salaries.append(0)
+
+    return JSONResponse({
+        "apartment_name": apartment_name,
+        "shifts": {
+            "labels": shift_labels,
+            "datasets": [
+                {
+                    "label": "שעות",
+                    "data": shift_hours,
+                    "backgroundColor": "#1f6feb",
+                    "yAxisID": "y"
+                },
+                {
+                    "label": "מספר משמרות",
+                    "data": shift_counts,
+                    "backgroundColor": "#10B981",
+                    "yAxisID": "y1"
+                }
+            ]
+        },
+        "guides": {
+            "labels": guide_labels,
+            "datasets": [{
+                "label": "שכר כולל (ש\"ח)",
+                "data": [round(s, 2) for s in guide_salaries],
+                "backgroundColor": _generate_colors(len(guide_salaries))
+            }]
+        }
+    })
+
+
+def get_guide_yearly(person_id: int, year: int) -> JSONResponse:
+    """
+    מגמת שכר של מדריך ב-12 החודשים האחרונים.
+
+    Args:
+        person_id: מזהה מדריך
+        year: שנה (נקודת התחלה)
+    """
+    from app_utils import get_daily_segments_data, aggregate_daily_segments_to_monthly
+    from core.time_utils import get_shabbat_times_cache
+    from core.history import get_minimum_wage_for_month
+    from core.database import PostgresConnection
+
+    labels = []
+    salary_data = []
+    hours_data = []
+
+    # 12 חודשים אחורה מהחודש הנוכחי
+    current_month = datetime.now(config.LOCAL_TZ).month
+    current_year = year
+
+    with get_conn() as conn:
+        # שליפת שם המדריך
+        guide_row = conn.execute(
+            "SELECT name FROM people WHERE id = %s", (person_id,)
+        ).fetchone()
+        guide_name = guide_row["name"] if guide_row else f"מדריך {person_id}"
+
+        shabbat_cache = get_shabbat_times_cache(conn.conn)
+        conn_wrapper = PostgresConnection(conn.conn, use_pool=False)
+
+        for i in range(11, -1, -1):
+            target_month = current_month - i
+            target_year = current_year
+
+            while target_month <= 0:
+                target_month += 12
+                target_year -= 1
+
+            minimum_wage = get_minimum_wage_for_month(conn.conn, target_year, target_month)
+
+            try:
+                daily_segments, _ = get_daily_segments_data(
+                    conn_wrapper, person_id, target_year, target_month,
+                    shabbat_cache, minimum_wage
+                )
+                monthly_totals = aggregate_daily_segments_to_monthly(
+                    conn_wrapper, daily_segments, person_id,
+                    target_year, target_month, minimum_wage
+                )
+
+                salary = monthly_totals.get("total_payment", 0)
+                hours = monthly_totals.get("total_hours", 0) / 60
+            except Exception:
+                salary = 0
+                hours = 0
+
+            labels.append(f"{target_month:02d}/{target_year}")
+            salary_data.append(round(salary, 2))
+            hours_data.append(round(hours, 1))
+
+    return JSONResponse({
+        "guide_name": guide_name,
+        "labels": labels,
+        "datasets": [
+            {
+                "label": "שכר (ש\"ח)",
+                "data": salary_data,
+                "borderColor": "#1f6feb",
+                "backgroundColor": "rgba(31, 111, 235, 0.1)",
+                "fill": True,
+                "yAxisID": "y"
+            },
+            {
+                "label": "שעות",
+                "data": hours_data,
+                "borderColor": "#10B981",
+                "backgroundColor": "rgba(16, 185, 129, 0.1)",
+                "fill": True,
+                "yAxisID": "y1"
+            }
+        ]
+    })
+
+
+def get_housing_arrays_list() -> JSONResponse:
+    """רשימת כל מערכי הדיור."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            "SELECT id, name FROM housing_arrays ORDER BY name"
+        ).fetchall()
+
+    return JSONResponse({
+        "arrays": [{"id": r["id"], "name": r["name"]} for r in rows]
+    })
+
+
+def get_apartments_list(housing_array_id: Optional[int] = None) -> JSONResponse:
+    """רשימת דירות, אופציונלי לפי מערך דיור."""
+    with get_conn() as conn:
+        if housing_array_id:
+            rows = conn.execute("""
+                SELECT id, name FROM apartments
+                WHERE housing_array_id = %s
+                ORDER BY name
+            """, (housing_array_id,)).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT id, name FROM apartments ORDER BY name"
+            ).fetchall()
+
+    return JSONResponse({
+        "apartments": [{"id": r["id"], "name": r["name"]} for r in rows]
+    })
+
+
+def get_guides_list() -> JSONResponse:
+    """רשימת כל המדריכים הפעילים."""
+    with get_conn() as conn:
+        rows = conn.execute("""
+            SELECT id, name FROM people
+            WHERE is_active::integer = 1
+            ORDER BY name
+        """).fetchall()
+
+    return JSONResponse({
+        "guides": [{"id": r["id"], "name": r["name"]} for r in rows]
+    })

@@ -62,6 +62,15 @@ from routes.stats import (
     get_comparison_data,
     get_shift_types_distribution,
     get_all_stats,
+    get_compare_housing_arrays,
+    get_top_apartments_by_percent,
+    get_apartments_in_array,
+    get_apartments_in_array_by_percent,
+    get_apartment_details,
+    get_guide_yearly,
+    get_housing_arrays_list,
+    get_apartments_list,
+    get_guides_list,
 )
 
 # Configure logging
@@ -385,6 +394,61 @@ def stats_shift_types_route(year: int, month: int):
 def stats_all_route(year: int, month: int):
     """Get all stats data in one call - faster loading."""
     return get_all_stats(year, month)
+
+
+@app.get("/api/stats/compare-arrays")
+def stats_compare_arrays_route(year: int, month: int, array_ids: str):
+    """Compare 2-5 housing arrays."""
+    ids = [int(x) for x in array_ids.split(",") if x.strip()]
+    return get_compare_housing_arrays(year, month, ids)
+
+
+@app.get("/api/stats/top-apartments")
+def stats_top_apartments_route(year: int, month: int, percent: int = 100, limit: int = 10):
+    """Get top apartments by percent."""
+    return get_top_apartments_by_percent(year, month, percent, limit)
+
+
+@app.get("/api/stats/apartments-in-array")
+def stats_apartments_in_array_route(year: int, month: int, housing_array_id: int):
+    """Get all apartments in a housing array."""
+    return get_apartments_in_array(year, month, housing_array_id)
+
+
+@app.get("/api/stats/apartments-in-array-by-percent")
+def stats_apartments_in_array_by_percent_route(year: int, month: int, housing_array_id: int):
+    """Get apartments in array with percent breakdown."""
+    return get_apartments_in_array_by_percent(year, month, housing_array_id)
+
+
+@app.get("/api/stats/apartment-details")
+def stats_apartment_details_route(year: int, month: int, apartment_id: int):
+    """Get apartment details - shifts and guides."""
+    return get_apartment_details(year, month, apartment_id)
+
+
+@app.get("/api/stats/guide-yearly")
+def stats_guide_yearly_route(person_id: int, year: int):
+    """Get guide yearly trend - 12 months."""
+    return get_guide_yearly(person_id, year)
+
+
+@app.get("/api/stats/housing-arrays")
+def stats_housing_arrays_route():
+    """Get list of housing arrays."""
+    return get_housing_arrays_list()
+
+
+@app.get("/api/stats/apartments")
+def stats_apartments_route(housing_array_id: int = None):
+    """Get list of apartments."""
+    return get_apartments_list(housing_array_id)
+
+
+@app.get("/api/stats/guides")
+def stats_guides_route():
+    """Get list of active guides."""
+    return get_guides_list()
 
 
 # Email routes
