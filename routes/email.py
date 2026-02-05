@@ -1,18 +1,20 @@
 """
 Email routes for DiyurCalc application.
 Contains routes for email settings management and sending guide reports.
+פונקציות הגדרות מייל דורשות הרשאת מנהל על (super_admin).
 """
 from __future__ import annotations
 
 import logging
 from datetime import datetime
 
-from fastapi import Request
+from fastapi import Request, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from core.config import config
 from core.database import get_conn
+from core.auth import is_super_admin
 from services.email_service import (
     get_email_settings,
     save_email_settings,
@@ -26,6 +28,12 @@ from utils.utils import format_currency, human_date
 
 logger = logging.getLogger(__name__)
 
+
+def _require_super_admin(request: Request) -> None:
+    """בודק שהמשתמש הוא מנהל על, אחרת זורק שגיאה 403."""
+    if not is_super_admin(request):
+        raise HTTPException(status_code=403, detail="אין הרשאה - נדרש מנהל על")
+
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
 templates.env.filters["format_currency"] = format_currency
 templates.env.filters["human_date"] = human_date
@@ -33,7 +41,8 @@ templates.env.globals["app_version"] = config.VERSION
 
 
 def email_settings_page(request: Request) -> HTMLResponse:
-    """Display email settings management page."""
+    """Display email settings management page. רק למנהל על."""
+    _require_super_admin(request)
     with get_conn() as conn:
         settings = get_email_settings(conn)
 
@@ -47,7 +56,8 @@ def email_settings_page(request: Request) -> HTMLResponse:
 
 
 async def update_email_settings(request: Request) -> RedirectResponse:
-    """Update email settings from form submission."""
+    """Update email settings from form submission. רק למנהל על."""
+    _require_super_admin(request)
     try:
         form_data = await request.form()
 
@@ -90,7 +100,8 @@ async def update_email_settings(request: Request) -> RedirectResponse:
 
 
 async def test_email_settings(request: Request) -> JSONResponse:
-    """Test email connection with current settings."""
+    """Test email connection with current settings. רק למנהל על."""
+    _require_super_admin(request)
     try:
         form_data = await request.json()
 
@@ -161,7 +172,8 @@ def send_all_guides_email_route(request: Request, year: int, month: int) -> JSON
 
 
 async def send_test_email_route(request: Request) -> JSONResponse:
-    """Send a test email to verify email settings."""
+    """Send a test email to verify email settings. רק למנהל על."""
+    _require_super_admin(request)
     try:
         form_data = await request.json()
         to_email = form_data.get("to_email", "")

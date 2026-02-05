@@ -1965,8 +1965,7 @@ def _manual_test_specific_day(conn, worker_name: str, test_date: date):
     # שליפת דיווחים ליום הספציפי
     cursor.execute("""
         SELECT tr.id, tr.date, tr.start_time, tr.end_time,
-               st.name AS shift_name, st.rate AS shift_rate,
-               st.is_minimum_wage
+               st.name AS shift_name
         FROM time_reports tr
         LEFT JOIN shift_types st ON st.id = tr.shift_type_id
         WHERE tr.person_id = %s AND tr.date = %s
@@ -1983,12 +1982,10 @@ def _manual_test_specific_day(conn, worker_name: str, test_date: date):
     print("-" * 60)
 
     for report in reports:
-        report_id, rep_date, start_time, end_time, shift_name, shift_rate, is_min_wage = report
-        rate_display = "מינימום" if is_min_wage else f"{shift_rate/100:.2f}" if shift_rate else "?"
+        report_id, rep_date, start_time, end_time, shift_name = report
         print(f"  ID: {report_id}")
         print(f"    שעות: {start_time} - {end_time}")
         print(f"    משמרת: {shift_name or '?'}")
-        print(f"    תעריף: {rate_display} ש\"ח")
         print()
 
 

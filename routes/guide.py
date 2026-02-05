@@ -31,6 +31,25 @@ templates.env.filters["human_date"] = human_date
 templates.env.globals["app_version"] = config.VERSION
 
 
+def _validate_guide_access(person_id: int, housing_filter: Optional[int]) -> None:
+    """
+    בודק שלמשתמש יש הרשאה לצפות במדריך.
+    זורק HTTPException 403 אם אין הרשאה.
+    """
+    if housing_filter is None:
+        return  # מנהל על - יכול לראות הכל
+
+    # בדוק שהמדריך שייך למערך הדיור של המשתמש
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT housing_array_id FROM people WHERE id = %s",
+            (person_id,)
+        ).fetchone()
+
+        if not row or row["housing_array_id"] != housing_filter:
+            raise HTTPException(status_code=403, detail="אין הרשאה לצפות במדריך זה")
+
+
 def simple_summary_view(
     request: Request,
     person_id: int,
@@ -38,6 +57,10 @@ def simple_summary_view(
     year: Optional[int] = None
 ) -> HTMLResponse:
     """Simple summary view for a guide."""
+    # בדיקת הרשאה - מנהל מסגרת יכול לראות רק מדריכים מהמערך שלו
+    housing_filter = get_housing_array_filter()
+    _validate_guide_access(person_id, housing_filter)
+
     start_time = time.time()
     logger.info(f"Starting simple_summary_view for person_id={person_id}, {month}/{year}")
 
@@ -145,6 +168,10 @@ def guide_view(
     year: Optional[int] = None
 ) -> HTMLResponse:
     """Detailed guide view with full monthly report."""
+    # בדיקת הרשאה - מנהל מסגרת יכול לראות רק מדריכים מהמערך שלו
+    housing_filter = get_housing_array_filter()
+    _validate_guide_access(person_id, housing_filter)
+
     func_start_time = time.time()
     logger.info(f"Starting guide_view for person_id={person_id}, {month}/{year}")
 
@@ -255,35 +282,18 @@ def guide_view(
             start_date = start_dt.date()
             end_date = end_dt.date()
 
-            # סינון לפי מערך דיור אם הוגדר
-            housing_filter = get_housing_array_filter()
-            if housing_filter is not None:
-                month_reports = conn.execute("""
-                    SELECT tr.*, st.name as shift_name,
-                           a.apartment_type_id, a.name as apartment_name,
-                           tr.rate_apartment_type_id,
-                           p.is_married
-                    FROM time_reports tr
-                    LEFT JOIN shift_types st ON st.id = tr.shift_type_id
-                    LEFT JOIN apartments a ON tr.apartment_id = a.id
-                    LEFT JOIN people p ON tr.person_id = p.id
-                    WHERE tr.person_id = %s AND tr.date >= %s AND tr.date < %s
-                      AND a.housing_array_id = %s
-                    ORDER BY tr.date, tr.start_time
-                """, (person_id, start_date, end_date, housing_filter)).fetchall()
-            else:
-                month_reports = conn.execute("""
-                    SELECT tr.*, st.name as shift_name,
-                           a.apartment_type_id, a.name as apartment_name,
-                           tr.rate_apartment_type_id,
-                           p.is_married
-                    FROM time_reports tr
-                    LEFT JOIN shift_types st ON st.id = tr.shift_type_id
-                    LEFT JOIN apartments a ON tr.apartment_id = a.id
-                    LEFT JOIN people p ON tr.person_id = p.id
-                    WHERE tr.person_id = %s AND tr.date >= %s AND tr.date < %s
-                    ORDER BY tr.date, tr.start_time
-                """, (person_id, start_date, end_date)).fetchall()
+            month_reports = conn.execute("""
+                SELECT tr.*, st.name as shift_name,
+                       a.apartment_type_id, a.name as apartment_name,
+                       tr.rate_apartment_type_id,
+                       p.is_married
+                FROM time_reports tr
+                LEFT JOIN shift_types st ON st.id = tr.shift_type_id
+                LEFT JOIN apartments a ON tr.apartment_id = a.id
+                LEFT JOIN people p ON tr.person_id = p.id
+                WHERE tr.person_id = %s AND tr.date >= %s AND tr.date < %s
+                ORDER BY tr.date, tr.start_time
+            """, (person_id, start_date, end_date)).fetchall()
 
             # Build shift_segments list for display
             shift_segments = []

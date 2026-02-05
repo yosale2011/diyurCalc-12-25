@@ -10,7 +10,7 @@ Import directly from submodules for specific functionality:
 import logging
 import psycopg2
 import psycopg2.extras
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 
 from utils.cache_manager import cached
 from core.time_utils import get_shabbat_times_cache
@@ -28,20 +28,41 @@ logger = logging.getLogger(__name__)
 
 
 @cached(ttl=1800)  # Cache for 30 minutes
-def get_active_guides() -> List[Dict[str, Any]]:
-    """Fetch active guides from people table."""
+def get_active_guides(housing_array_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    """
+    שליפת מדריכים פעילים.
+
+    Args:
+        housing_array_id: מזהה מערך דיור לסינון. אם None - מחזיר את כל המדריכים.
+
+    Returns:
+        רשימת מדריכים פעילים.
+    """
     from core.database import get_pooled_connection, return_connection
     conn = get_pooled_connection()
     try:
         cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-        cursor.execute(
-            """
-            SELECT id, name, type, is_active, start_date
-            FROM people
-            WHERE is_active::integer = 1
-            ORDER BY name
-            """
-        )
+        if housing_array_id is not None:
+            # סינון מדריכים לפי מערך דיור שלהם
+            cursor.execute(
+                """
+                SELECT id, name, type, is_active, start_date
+                FROM people
+                WHERE is_active::integer = 1
+                  AND housing_array_id = %s
+                ORDER BY name
+                """,
+                (housing_array_id,)
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT id, name, type, is_active, start_date
+                FROM people
+                WHERE is_active::integer = 1
+                ORDER BY name
+                """
+            )
         rows = cursor.fetchall()
     finally:
         cursor.close()

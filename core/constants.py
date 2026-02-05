@@ -49,6 +49,12 @@ TAGBUR_SHIFT_IDS: Set[int] = {TAGBUR_FRIDAY_SHIFT_ID, TAGBUR_SHABBAT_SHIFT_ID}
 REGULAR_APT_TYPE = 1        # דירה רגילה
 THERAPEUTIC_APT_TYPE = 2    # דירה טיפולית
 
+# מיפוי סוג דירה לשם
+APT_TYPE_NAMES = {
+    REGULAR_APT_TYPE: "דירה רגילה",
+    THERAPEUTIC_APT_TYPE: "דירה טיפולית",
+}
+
 # =============================================================================
 # Night Shift Constants (in minutes)
 # =============================================================================

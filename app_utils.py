@@ -36,6 +36,7 @@ from core.constants import (
     # Apartment types
     REGULAR_APT_TYPE,
     THERAPEUTIC_APT_TYPE,
+    APT_TYPE_NAMES,
     # Standby constants
     MAX_CANCELLED_STANDBY_DEDUCTION,
     STANDBY_CANCEL_OVERLAP_THRESHOLD,
@@ -996,12 +997,14 @@ def get_daily_segments_data(
                        at.hourly_wage_supplement,
                        at.name AS apartment_type_name,
                        ha.name AS housing_array_name,
+                       rate_at.name AS rate_apartment_type_name,
                        p.is_married,
                        p.name as person_name
                 FROM time_reports tr
                 LEFT JOIN shift_types st ON st.id = tr.shift_type_id
                 JOIN apartments ap ON ap.id = tr.apartment_id
                 LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
+                LEFT JOIN apartment_types rate_at ON rate_at.id = tr.rate_apartment_type_id
                 LEFT JOIN housing_arrays ha ON ha.id = ap.housing_array_id
                 LEFT JOIN people p ON p.id = tr.person_id
                 WHERE tr.person_id = %s AND tr.date >= %s AND tr.date < %s
@@ -1022,12 +1025,14 @@ def get_daily_segments_data(
                        at.hourly_wage_supplement,
                        at.name AS apartment_type_name,
                        ha.name AS housing_array_name,
+                       rate_at.name AS rate_apartment_type_name,
                        p.is_married,
                        p.name as person_name
                 FROM time_reports tr
                 LEFT JOIN shift_types st ON st.id = tr.shift_type_id
                 LEFT JOIN apartments ap ON ap.id = tr.apartment_id
                 LEFT JOIN apartment_types at ON at.id = ap.apartment_type_id
+                LEFT JOIN apartment_types rate_at ON rate_at.id = tr.rate_apartment_type_id
                 LEFT JOIN housing_arrays ha ON ha.id = ap.housing_array_id
                 LEFT JOIN people p ON p.id = tr.person_id
                 WHERE tr.person_id = %s AND tr.date >= %s AND tr.date < %s
@@ -1376,11 +1381,12 @@ def get_daily_segments_data(
                 apartment_name = r.get("apartment_name", "")
                 apartment_type_name = r.get("apartment_type_name", "")
                 housing_array_name = r.get("housing_array_name", "")
+                rate_apartment_type_name = r.get("rate_apartment_type_name", "")
 
                 # For fixed segment shifts (tagbur/vacation/sick), standby_defined_end = seg_end (full standby)
                 standby_defined_end = seg_end if effective_seg_type == "standby" else None
                 housing_array_id = r.get("housing_array_id")
-                entry["segments"].append((seg_start, seg_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, actual_seg_date, actual_apartment_type_id, standby_defined_end, housing_array_id, apartment_type_name, housing_array_name))
+                entry["segments"].append((seg_start, seg_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, actual_seg_date, actual_apartment_type_id, standby_defined_end, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name))
 
             continue  # דלג על העיבוד הרגיל עבור משמרת זו
 
@@ -1588,13 +1594,14 @@ def get_daily_segments_data(
                     apartment_name = r.get("apartment_name", "")
                     apartment_type_name = r.get("apartment_type_name", "")
                     housing_array_name = r.get("housing_array_name", "")
+                    rate_apartment_type_name = r.get("rate_apartment_type_name", "")
 
                     # Store actual_date (p_date) for correct Shabbat calculation even when displayed under different day
                     # For standby segments, also store the defined end time (before min with report end)
                     # to detect early exit: if eff_end < standby_defined_end, it's early exit
                     standby_defined_end = current_seg_end if effective_seg_type == "standby" else None
                     housing_array_id = r.get("housing_array_id")
-                    entry["segments"].append((eff_start, eff_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, p_date, actual_apartment_type_id, standby_defined_end, housing_array_id, apartment_type_name, housing_array_name))
+                    entry["segments"].append((eff_start, eff_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, p_date, actual_apartment_type_id, standby_defined_end, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name))
                     
                 # Uncovered minutes -> work
                 # חישוב שעות עבודה שלא מכוסות ע"י סגמנטים מוגדרים
@@ -1614,6 +1621,7 @@ def get_daily_segments_data(
                     apartment_name = r.get("apartment_name", "")
                     apartment_type_name = r.get("apartment_type_name", "")
                     housing_array_name = r.get("housing_array_name", "")
+                    rate_apartment_type_name = r.get("rate_apartment_type_name", "")
                     housing_array_id = r.get("housing_array_id")
 
                     for uncov_start, uncov_end in uncovered_intervals:
@@ -1634,7 +1642,7 @@ def get_daily_segments_data(
                             eff_uncov_start, eff_uncov_end, "work", "work",
                             r["shift_type_id"], segment_id,
                             apartment_type_id, is_married,
-                            apartment_name, p_date, actual_apartment_type_id, None, housing_array_id, apartment_type_name, housing_array_name
+                            apartment_name, p_date, actual_apartment_type_id, None, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name
                         ))
 
     # Process Daily Segments
@@ -1726,12 +1734,12 @@ def get_daily_segments_data(
         sick_segments = []
 
         for seg_entry in raw_segments:
-            # Normalize length to 15 (now includes apartment_type_name, housing_array_name)
-            if len(seg_entry) < 15:
+            # Normalize length to 16 (now includes rate_apartment_type_name)
+            if len(seg_entry) < 16:
                 # Pad with None
-                seg_entry = seg_entry + (None,) * (15 - len(seg_entry))
+                seg_entry = seg_entry + (None,) * (16 - len(seg_entry))
 
-            s_start, s_end, s_type, label, sid, seg_id, apt_type, married, apt_name, actual_date, actual_apt_type, standby_defined_end, housing_array_id, apt_type_name, ha_name = seg_entry
+            s_start, s_end, s_type, label, sid, seg_id, apt_type, married, apt_name, actual_date, actual_apt_type, standby_defined_end, housing_array_id, apt_type_name, ha_name, rate_apt_type_name = seg_entry
 
             if s_type == "standby":
                 # Include shift_type_id (sid) for priority selection when merging
@@ -1742,7 +1750,7 @@ def get_daily_segments_data(
             elif s_type == "sick":
                 sick_segments.append((s_start, s_end, actual_date))
             else:
-                work_segments.append((s_start, s_end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, housing_array_id, apt_type_name, ha_name))
+                work_segments.append((s_start, s_end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name))
                 
         work_segments.sort(key=lambda x: x[0])
         standby_segments.sort(key=lambda x: x[0])
@@ -1934,6 +1942,7 @@ def get_daily_segments_data(
                     "type": "vacation",
                     "apartment_name": "",
                     "apartment_type_name": "",
+                    "rate_apartment_type_name": "",
                     "housing_array_name": "",
                     "shift_name": "חופשה",
                     "shift_type": "חופשה",
@@ -1970,6 +1979,7 @@ def get_daily_segments_data(
                     "type": "sick",
                     "apartment_name": "",
                     "apartment_type_name": "",
+                    "rate_apartment_type_name": "",
                     "housing_array_name": "",
                     "shift_name": "מחלה",
                     "shift_type": "מחלה",
@@ -2013,6 +2023,7 @@ def get_daily_segments_data(
                         "apartment_name": "",
                         "apartment_type_id": actual_apt_type,  # Use actual type for visual indicator
                         "apartment_type_name": "",
+                        "rate_apartment_type_name": "",
                         "housing_array_name": "",
                         "shift_name": "כוננות",
                         "shift_type": "כוננות",
@@ -2083,8 +2094,8 @@ def get_daily_segments_data(
 
         # Merge all events for processing - כל המשמרות כולל תגבור
         all_events = []
-        for s, e, l, sid, apt_name, actual_date, apt_type, actual_apt_type, housing_array_id, apt_type_name, ha_name in work_segments:
-            all_events.append({"start": s, "end": e, "type": "work", "label": l, "shift_id": sid, "apartment_name": apt_name or "", "apartment_type_id": actual_apt_type, "rate_apt_type": apt_type, "actual_date": actual_date or day_date, "housing_array_id": housing_array_id, "apartment_type_name": apt_type_name or "", "housing_array_name": ha_name or ""})
+        for s, e, l, sid, apt_name, actual_date, apt_type, actual_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name in work_segments:
+            all_events.append({"start": s, "end": e, "type": "work", "label": l, "shift_id": sid, "apartment_name": apt_name or "", "apartment_type_id": actual_apt_type, "rate_apt_type": apt_type, "actual_date": actual_date or day_date, "housing_array_id": housing_array_id, "apartment_type_name": apt_type_name or "", "housing_array_name": ha_name or "", "rate_apt_type_name": rate_apt_type_name or ""})
         for s, e, seg_id, apt, married, actual_date, _shift_type_id, actual_apt_type, _standby_defined_end in standby_segments:
             all_events.append({"start": s, "end": e, "type": "standby", "label": "כוננות", "seg_id": seg_id, "apt": apt, "actual_apt_type": actual_apt_type, "married": married, "actual_date": actual_date or day_date})
         for s, e, actual_date in vacation_segments:
@@ -2109,13 +2120,13 @@ def get_daily_segments_data(
             # segments is list of (start, end, label, shift_id, apartment_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name)
             # Convert to format expected by _calculate_chain_wages: (start, end, shift_id, actual_date)
             # Include actual_date for each segment for correct Shabbat calculation
-            chain_segs = [(s, e, sid, adate) for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name in segments]
+            chain_segs = [(s, e, sid, adate) for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name in segments]
 
             # Calculate night hours in current chain segments
             # Times are in extended 00:00-32:00 axis (0-1920 minutes)
             # where 1440+ represents next day (00:00-08:00 after midnight)
             current_chain_night_minutes = 0
-            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name in segments:
+            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name in segments:
                 # Convert from extended 00:00-32:00 axis to 00:00-24:00 axis
                 real_start = s % 1440
                 real_end = e % 1440
@@ -2185,7 +2196,7 @@ def get_daily_segments_data(
             pay, c100, c125, c150, c175, c200, seg_detail, effective_rate = calculate_chain_pay(segments, minutes_offset, carryover_night_minutes)
 
             # Calculate total chain duration (including offset from previous day)
-            chain_duration = sum(e - s for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name in segments)
+            chain_duration = sum(e - s for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name in segments)
             chain_total_minutes = minutes_offset + chain_duration
 
             # Get apartment names and types from segments - segments is (start, end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name)
@@ -2197,7 +2208,7 @@ def get_daily_segments_data(
             chain_rate_apt_types = set()
             chain_apt_type_names = set()
             chain_ha_names = set()
-            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name in segments:
+            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name in segments:
                 if apt:
                     chain_apartments.add(apt)
                 if apt_type:
@@ -2238,7 +2249,7 @@ def get_daily_segments_data(
                 # מיון הסגמנטים המקוריים לפי זמן התחלה
                 sorted_segs = sorted(segs, key=lambda x: x[0])
 
-                for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name in sorted_segs:
+                for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name in sorted_segs:
                     # בדיקה אם יש חפיפה עם הטווח הנוכחי
                     if s < seg_end and e > current_start:
                         # זמן התחלה של החפיפה
@@ -2259,7 +2270,8 @@ def get_daily_segments_data(
                                 "shift_id": sid,
                                 "housing_array_id": ha_id,
                                 "apt_type_name": apt_type_name,
-                                "ha_name": ha_name
+                                "ha_name": ha_name,
+                                "rate_apt_type_name": rate_apt_type_name
                             })
                             current_start = overlap_end
 
@@ -2269,7 +2281,7 @@ def get_daily_segments_data(
                 # אם לא נמצאו חפיפות, החזר סגמנט בודד עם ברירת מחדל
                 if not result_segments:
                     if segs:
-                        s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name = segs[0]
+                        s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name = segs[0]
                         result_segments.append({
                             "start": seg_start,
                             "end": seg_end,
@@ -2282,7 +2294,8 @@ def get_daily_segments_data(
                             "shift_id": sid,
                             "housing_array_id": ha_id,
                             "apt_type_name": apt_type_name,
-                            "ha_name": ha_name
+                            "ha_name": ha_name,
+                            "rate_apt_type_name": rate_apt_type_name
                         })
                     else:
                         result_segments.append({
@@ -2297,7 +2310,8 @@ def get_daily_segments_data(
                             "shift_id": None,
                             "housing_array_id": None,
                             "apt_type_name": "",
-                            "ha_name": ""
+                            "ha_name": "",
+                            "rate_apt_type_name": ""
                         })
 
                 return result_segments
@@ -2330,6 +2344,7 @@ def get_daily_segments_data(
                 seg_housing_array_id = sub_seg.get("housing_array_id")
                 seg_apt_type_name = sub_seg.get("apt_type_name", "")
                 seg_ha_name = sub_seg.get("ha_name", "")
+                seg_rate_apt_type_name = sub_seg.get("rate_apt_type_name", "")
 
                 seg_duration = seg_end - seg_start
 
@@ -2399,6 +2414,7 @@ def get_daily_segments_data(
                 display_apt_type = seg_apt_type if seg_apt_type is not None else chain_apt_type
                 display_apt_type_name = seg_apt_type_name if seg_apt_type_name else chain_apt_type_name
                 display_ha_name = seg_ha_name if seg_ha_name else chain_ha_name
+                display_rate_apt_type_name = seg_rate_apt_type_name
 
                 # קביעת סיבת מעבר שורה (אם לא השורה הראשונה)
                 # מציג את הסיבה בשורה הנוכחית (למה התחלנו שורה חדשה)
@@ -2445,6 +2461,7 @@ def get_daily_segments_data(
                     "apartment_name": display_apt_name,
                     "apartment_type_id": display_apt_type,
                     "apartment_type_name": display_apt_type_name,
+                    "rate_apartment_type_name": display_rate_apt_type_name,
                     "housing_array_name": display_ha_name,
                     "shift_name": seg_shift_name,
                     "shift_type": shift_type_label,
@@ -2463,7 +2480,7 @@ def get_daily_segments_data(
             # Calculate night minutes in this chain (for carryover to next day)
             # Times are in extended 00:00-32:00 axis (0-1920 minutes)
             chain_night_minutes = 0
-            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name in segments:
+            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name in segments:
                 # Convert from extended 00:00-32:00 axis to 00:00-24:00 axis
                 real_start = s % 1440
                 real_end = e % 1440
@@ -2632,6 +2649,7 @@ def get_daily_segments_data(
                         "apartment_name": event.get("apartment_name", ""),
                         "apartment_type_id": event.get("actual_apt_type"),  # Use actual type for visual indicator
                         "apartment_type_name": "",
+                        "rate_apartment_type_name": "",
                         "housing_array_name": "",
                         "shift_name": "כוננות",
                         "shift_type": "כוננות",
@@ -2658,6 +2676,7 @@ def get_daily_segments_data(
                         "apartment_name": "",
                         "apartment_type_id": None,
                         "apartment_type_name": "",
+                        "rate_apartment_type_name": "",
                         "housing_array_name": "",
                         "shift_name": label,
                         "shift_type": label,
@@ -2670,9 +2689,9 @@ def get_daily_segments_data(
                 last_end = end
                 last_etype = etype
             else:
-                # segments: (start, end, label, shift_id, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name)
+                # segments: (start, end, label, shift_id, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name)
                 # apt_type = rate_apt_type (לחישוב), actual_apt_type = apartment_type_id (להצגה)
-                current_chain_segments.append((start, end, event["label"], event["shift_id"], event.get("apartment_name", ""), event.get("actual_date"), event.get("rate_apt_type"), event.get("apartment_type_id"), event.get("rate_apt_type"), event.get("housing_array_id"), event.get("apartment_type_name", ""), event.get("housing_array_name", "")))
+                current_chain_segments.append((start, end, event["label"], event["shift_id"], event.get("apartment_name", ""), event.get("actual_date"), event.get("rate_apt_type"), event.get("apartment_type_id"), event.get("rate_apt_type"), event.get("housing_array_id"), event.get("apartment_type_name", ""), event.get("housing_array_name", ""), event.get("rate_apt_type_name", "")))
                 last_end = end
                 last_etype = etype
 

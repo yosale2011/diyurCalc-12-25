@@ -1,21 +1,29 @@
 """
 Admin routes for DiyurCalc application.
 Contains administrative functionality like payment codes management.
+כל הפונקציות בקובץ זה דורשות הרשאת מנהל על (super_admin).
 """
 from __future__ import annotations
 
 import logging
 
-from fastapi import Request
+from fastapi import Request, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from core.config import config
 from core.database import get_conn
 from core.logic import get_payment_codes
+from core.auth import is_super_admin
 from scripts.db_sync import sync_database, check_demo_database_status
 from utils.utils import format_currency, human_date
 
 logger = logging.getLogger(__name__)
+
+
+def _require_super_admin(request: Request) -> None:
+    """בודק שהמשתמש הוא מנהל על, אחרת זורק שגיאה 403."""
+    if not is_super_admin(request):
+        raise HTTPException(status_code=403, detail="אין הרשאה - נדרש מנהל על")
 
 templates = Jinja2Templates(directory=str(config.TEMPLATES_DIR))
 templates.env.filters["format_currency"] = format_currency
@@ -24,14 +32,16 @@ templates.env.globals["app_version"] = config.VERSION
 
 
 def manage_payment_codes(request: Request) -> HTMLResponse:
-    """Display payment codes management page."""
+    """Display payment codes management page. רק למנהל על."""
+    _require_super_admin(request)
     with get_conn() as conn:
         codes = get_payment_codes(conn.conn)
     return templates.TemplateResponse("payment_codes.html", {"request": request, "codes": codes})
 
 
 async def update_payment_codes(request: Request) -> RedirectResponse:
-    """Update payment codes from form submission."""
+    """Update payment codes from form submission. רק למנהל על."""
+    _require_super_admin(request)
     try:
         form_data = await request.form()
 
@@ -77,7 +87,8 @@ async def update_payment_codes(request: Request) -> RedirectResponse:
 
 
 def demo_sync_page(request: Request) -> HTMLResponse:
-    """Display demo database sync page."""
+    """Display demo database sync page. רק למנהל על."""
+    _require_super_admin(request)
     status = check_demo_database_status()
     return templates.TemplateResponse("demo_sync.html", {
         "request": request,
@@ -86,7 +97,8 @@ def demo_sync_page(request: Request) -> HTMLResponse:
 
 
 async def sync_demo_database(request: Request):
-    """Sync demo database with production data using Server-Sent Events for progress."""
+    """Sync demo database with production data using Server-Sent Events for progress. רק למנהל על."""
+    _require_super_admin(request)
     from fastapi.responses import StreamingResponse
     import json
 
@@ -156,7 +168,8 @@ async def sync_demo_database(request: Request):
 
 
 def demo_sync_status(request: Request) -> JSONResponse:
-    """Get demo database status."""
+    """Get demo database status. רק למנהל על."""
+    _require_super_admin(request)
     status = check_demo_database_status()
     return JSONResponse(status)
 
@@ -177,7 +190,8 @@ def get_month_lock_status(request: Request, year: int, month: int) -> JSONRespon
 
 
 async def lock_month_api(request: Request) -> JSONResponse:
-    """Lock a month to prevent changes."""
+    """Lock a month to prevent changes. רק למנהל על."""
+    _require_super_admin(request)
     from core.history import lock_month
     try:
         data = await request.json()
@@ -203,7 +217,8 @@ async def lock_month_api(request: Request) -> JSONResponse:
 
 
 async def unlock_month_api(request: Request) -> JSONResponse:
-    """Unlock a month to allow changes."""
+    """Unlock a month to allow changes. רק למנהל על."""
+    _require_super_admin(request)
     from core.history import unlock_month
     try:
         data = await request.json()

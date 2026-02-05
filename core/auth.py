@@ -150,3 +150,33 @@ def _log_login(conn, person_id: int, success: bool, ip_address: str = None) -> N
         """, (person_id, datetime.now(), success, ip_address))
     except Exception as e:
         logger.warning(f"שגיאה בתיעוד התחברות: {e}")
+
+
+# =============================================================================
+# פונקציות בדיקת הרשאות
+# =============================================================================
+
+
+def is_super_admin(request) -> bool:
+    """בודק אם המשתמש המחובר הוא מנהל על."""
+    user = getattr(request.state, 'current_user', None)
+    return user is not None and user.get('role') == 'super_admin'
+
+
+def is_framework_manager(request) -> bool:
+    """בודק אם המשתמש המחובר הוא מנהל מסגרת."""
+    user = getattr(request.state, 'current_user', None)
+    return user is not None and user.get('role') == 'framework_manager'
+
+
+def get_user_housing_array(request) -> Optional[int]:
+    """
+    מחזיר את מערך הדיור של המשתמש המחובר.
+
+    Returns:
+        מזהה מערך הדיור אם מנהל מסגרת, None אם מנהל על.
+    """
+    user = getattr(request.state, 'current_user', None)
+    if user and user.get('role') == 'framework_manager':
+        return user.get('housing_array_id')
+    return None

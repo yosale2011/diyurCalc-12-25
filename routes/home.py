@@ -33,12 +33,12 @@ def home(
     func_start_time = time.time()
     logger.info(f"Starting home for month={month}, year={year}, q={q}")
 
-    guides_start = time.time()
-    guides = get_active_guides()
-    logger.info(f"get_active_guides took: {time.time() - guides_start:.4f}s")
-
     # קבלת פילטר מערך דיור (לשימוש בשאילתות)
     housing_filter = get_housing_array_filter()
+
+    guides_start = time.time()
+    guides = get_active_guides(housing_filter)
+    logger.info(f"get_active_guides took: {time.time() - guides_start:.4f}s")
 
     months_start = time.time()
     months_all = available_months_from_db(housing_filter)

@@ -73,7 +73,7 @@ from routes.stats import (
     get_guides_list,
 )
 from routes.auth import login_page, login_submit, logout
-from core.auth import validate_session_token, SESSION_COOKIE_NAME
+from core.auth import validate_session_token, SESSION_COOKIE_NAME, is_framework_manager, is_super_admin
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -137,9 +137,6 @@ class DemoModeMiddleware(BaseHTTPMiddleware):
         return response
 
 
-app.add_middleware(DemoModeMiddleware)
-
-
 # Middleware לאימות משתמשים
 class AuthMiddleware(BaseHTTPMiddleware):
     """Middleware לבדיקת התחברות בכל בקשה."""
@@ -172,6 +169,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             )
 
         # עבור מנהל מסגרת - כפה סינון לפי המערך שלו
+        # חשוב: זה רץ אחרי DemoModeMiddleware ולכן דורס את הערך מהעוגייה
         if user.get("role") == "framework_manager" and user.get("housing_array_id"):
             set_housing_array_filter(user["housing_array_id"])
 
@@ -179,7 +177,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# סדר ה-middleware חשוב!
+# AuthMiddleware נוסף ראשון ולכן רץ אחרון (אחרי DemoModeMiddleware)
+# זה מאפשר לו לדרוס את ה-filter של מנהל מסגרת
 app.add_middleware(AuthMiddleware)
+app.add_middleware(DemoModeMiddleware)
 
 # Mount static files
 if config.STATIC_DIR:
@@ -612,7 +614,14 @@ def get_housing_arrays():
 
 @app.post("/api/set-housing-array-filter")
 async def set_housing_array_filter_api(request: Request):
-    """מגדיר את מערך הדיור לסינון (שומר בעוגייה)."""
+    """מגדיר את מערך הדיור לסינון (שומר בעוגייה). רק למנהל על."""
+    # מנהל מסגרת לא יכול לשנות את מערך הדיור שלו
+    if is_framework_manager(request):
+        return JSONResponse(
+            {"success": False, "error": "אין הרשאה לשנות מערך דיור"},
+            status_code=403
+        )
+
     try:
         body = await request.json()
         housing_array_id = body.get("housing_array_id")

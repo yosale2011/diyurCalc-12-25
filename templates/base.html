@@ -222,9 +222,11 @@
         <a href="/">מדריכים - דוח שעות</a>
         <a href="/summary" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">סיכום שכר כללי</a>
         <a href="/stats" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">סטטיסטיקות</a>
+        {% if request.state.current_user and request.state.current_user.role == 'super_admin' %}
         <a href="/admin/payment-codes" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">ניהול סמלי שכר</a>
         <a href="/admin/email-settings" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">⚙️ הגדרות מייל</a>
         <a href="/admin/demo-sync" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">סנכרון דמו</a>
+        {% endif %}
     </div>
     <div style="display: flex; align-items: center; gap: 12px;">
         {% if not request.state.current_user or request.state.current_user.role != 'framework_manager' %}
@@ -240,6 +242,7 @@
             <option value="">כל המערכים</option>
         </select>
         {% endif %}
+        {% if request.state.current_user and request.state.current_user.role == 'super_admin' %}
         <button id="demo-toggle-btn" onclick="toggleDemoMode()" style="
             padding: 6px 12px;
             border-radius: 6px;
@@ -261,6 +264,7 @@
             "></span>
             <span id="demo-label">ייצור</span>
         </button>
+        {% endif %}
         <div style="color: #fff; text-align: left; font-size: 0.85em;">
             <div>גרסה {{ app_version }}</div>
             <div id="db-name-display" style="font-size: 0.75em; opacity: 0.8;"></div>

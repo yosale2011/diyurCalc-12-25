@@ -792,7 +792,7 @@
                     if chain.apartment_type_id == 2 %}<span title="דירה טיפולית"
                       style="color: #e91e63; font-size: 0.65em; margin-right: 2px;">&#x2764;</span>{% endif %}</td>
                   <td style="font-size: 0.85em; color: #666; white-space: nowrap;">{{ chain.housing_array_name or '-' }}</td>
-                  <td style="font-size: 0.85em; color: #666; white-space: nowrap;">{{ chain.apartment_type_name or '-' }}</td>
+                  <td style="font-size: 0.85em; color: #666; white-space: nowrap;">{{ chain.apartment_type_name or '-' }}{% if chain.rate_apartment_type_name and chain.rate_apartment_type_name != chain.apartment_type_name %} <span style="font-size: 0.9em; color: #888;">(משולם כ: {{ chain.rate_apartment_type_name }})</span>{% endif %}</td>
                   <td style="font-size: 0.85em; color: #666; white-space: nowrap;">{% if chain.type == 'standby' %}-{% else %}{{ "%.2f"|format(chain.effective_rate or 0) }}{% endif %}</td>
                   <td>
                     {% if chain.shift_type %}

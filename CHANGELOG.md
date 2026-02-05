@@ -6,6 +6,50 @@
 
 ---
 
+## [2.3.2] - 2026-02-05
+
+### שינויים
+- **שיפור תצוגה**: הצגת סוג דירה לתשלום כאשר שונה מסוג הדירה בפועל
+- כאשר `rate_apartment_type_id` מלא ושונה מסוג הדירה, מוצג: "סוג דירה (משולם כ: סוג דירה אחר)"
+- הוספת שדה `rate_apartment_type_name` לשאילתות SQL ולמבנה נתונים
+- קבצים: `app_utils.py`, `templates/guide.html`
+
+### סיבה
+שיפור שקיפות - המדריך רואה את סוג הדירה שבה עבד בפועל וגם לפי איזה סוג דירה הוא מקבל תשלום
+
+---
+
+## [2.3.1] - 2026-02-05
+
+### שינויים
+- **ניקוי DB**: הסרת שדות מיותרים מטבלת `shift_types`
+- שדות שהוסרו: `rate`, `is_minimum_wage`, `wage_percentage`, `single_rate`, `single_wage_percentage`, `married_rate`, `married_wage_percentage`, `pay_calculation_type`, `for_regular_apartment`, `for_substitute`, `for_all_guides`, `for_married`, `for_therapeutic_apartment`
+- תיקון פונקציית דיבוג `_manual_test_specific_day` שהשתמשה בשדות הישנים
+- קבצים: `tests/test_salary_calculation.py`
+- מיגרציית DB: `sql/drop_shift_types_unused_columns.sql`
+
+### סיבה
+השדות לא היו בשימוש - התעריפים עברו לטבלה `shift_type_housing_rates` עם פירוט לפי מערך דיור
+
+---
+
+## [2.3.0] - 2026-02-05
+
+### שינויים
+- **פיצ'ר חדש: מערכת הרשאות מלאה**
+- הגבלת דפי ניהול (payment-codes, email-settings, demo-sync) למנהל על בלבד
+- מנהל מסגרת לא יכול לשנות את מערך הדיור שלו (API `/api/set-housing-array-filter`)
+- הסתרת קישורי ניהול וכפתור מצב דמו מ-framework_manager בממשק
+- סינון רשימת מדריכים לפי מערך דיור (`get_active_guides()`)
+- אימות גישה לדפי מדריך - מנהל מסגרת רואה רק מדריכים מהמערך שלו
+- הוספת פונקציות עזר: `is_super_admin()`, `is_framework_manager()`, `get_user_housing_array()`
+- קבצים: `core/auth.py`, `app.py`, `routes/admin.py`, `routes/email.py`, `routes/guide.py`, `routes/home.py`, `core/logic.py`, `templates/base.html`
+
+### סיבה
+שיפור אבטחה - מנהל מסגרת צריך לראות רק את המידע של מערך הדיור שלו, ואין לו גישה לפונקציות ניהול
+
+---
+
 ## [2.2.7] - 2026-02-04
 
 ### שינויים
