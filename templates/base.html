@@ -227,6 +227,7 @@
         <a href="/admin/demo-sync" style="font-weight: normal; opacity: 0.9; font-size: 0.9em; background: rgba(255,255,255,0.2); padding: 4px 8px; border-radius: 4px;">סנכרון דמו</a>
     </div>
     <div style="display: flex; align-items: center; gap: 12px;">
+        {% if not request.state.current_user or request.state.current_user.role != 'framework_manager' %}
         <select id="housing-array-select" onchange="setHousingArrayFilter(this.value)" style="
             padding: 6px 10px;
             border-radius: 6px;
@@ -238,6 +239,7 @@
         ">
             <option value="">כל המערכים</option>
         </select>
+        {% endif %}
         <button id="demo-toggle-btn" onclick="toggleDemoMode()" style="
             padding: 6px 12px;
             border-radius: 6px;
@@ -263,6 +265,12 @@
             <div>גרסה {{ app_version }}</div>
             <div id="db-name-display" style="font-size: 0.75em; opacity: 0.8;"></div>
         </div>
+        {% if request.state.current_user %}
+        <div style="display: flex; align-items: center; gap: 8px; border-right: 1px solid rgba(255,255,255,0.3); padding-right: 12px;">
+            <span style="color: #fff; font-size: 0.85em;">{{ request.state.current_user.name }}</span>
+            <a href="/logout" style="color: #fff; opacity: 0.8; font-size: 0.8em; background: rgba(255,255,255,0.15); padding: 4px 8px; border-radius: 4px;">יציאה</a>
+        </div>
+        {% endif %}
     </div>
   </header>
   <main>

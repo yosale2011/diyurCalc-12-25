@@ -355,6 +355,7 @@
                     <h3 class="chart-title">
                         <span class="chart-title-icon">📊</span>
                         השוואת שכר בין מערכי דיור
+                        <span id="arrays-total" style="font-size: 14px; color: #64748b; margin-right: 16px;"></span>
                     </h3>
                 </div>
                 <div class="chart-wrapper">
@@ -548,7 +549,7 @@ function formatCurrency(num) {
 }
 
 function formatNumber(num) {
-    return new Intl.NumberFormat('he-IL').format(Math.round(num));
+    return new Intl.NumberFormat('he-IL', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(num);
 }
 
 function hideLoading(id) {
@@ -579,7 +580,7 @@ function getChartConfig(type = 'bar') {
         },
         scales: type !== 'doughnut' && type !== 'pie' ? {
             x: { reverse: true, grid: { display: false } },
-            y: { grid: { color: '#f1f5f9' }, ticks: { callback: v => formatNumber(v) } }
+            y: { grid: { color: '#f1f5f9' }, ticks: { callback: v => new Intl.NumberFormat('he-IL').format(Math.round(v)) } }
         } : {}
     };
 }
@@ -671,6 +672,11 @@ async function loadAllArraysChart() {
         const res = await fetch(`/api/stats/by-housing?year=${selectedYear}&month=${selectedMonth}`);
         const data = await res.json();
         hideLoading('arrays-all');
+
+        // הצגת סך הכל
+        if (data.total) {
+            document.getElementById('arrays-total').textContent = `(סה"כ: ${formatCurrency(data.total)})`;
+        }
 
         const ctx = document.getElementById('chart-arrays-all').getContext('2d');
         if (charts['arrays-all']) charts['arrays-all'].destroy();

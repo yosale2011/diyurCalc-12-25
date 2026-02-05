@@ -93,48 +93,49 @@ def stats_page(
 def get_salary_by_housing_array(year: int, month: int) -> JSONResponse:
     """
     שכר לפי מערך דיור - API לגרף.
-    מחשב את סה"כ השכר (עבודה + כוננויות + תוספות) לפי מערך דיור.
+
+    גישה פשוטה: מדריך שעבד בשני מערכים יופיע בשניהם עם כל השכר שלו.
+    הסכום הכולל של הגרף עשוי להיות גבוה יותר מייצוא שכר (אם יש מדריכים ביותר ממערך אחד).
     """
     from collections import defaultdict
 
+    # שימוש ב-cache - אותו חישוב כמו ייצוא שכר
+    summary_data, grand_totals = _get_cached_summary(year, month)
+
     with get_conn() as conn:
-        # שליפת שמות מערכי דיור
-        housing_arrays = {}
-        rows = conn.execute("SELECT id, name FROM housing_arrays").fetchall()
-        for r in rows:
-            housing_arrays[r["id"]] = r["name"]
+        # שליפת מערכי דיור לכל מדריך לפי הדירות שעבד בהן
+        totals_by_housing = defaultdict(float)
 
-        # שליפת קישור מדריך -> מערך דיור (לפי הדירות שלו)
-        person_to_housing = {}
-        rows = conn.execute("""
-            SELECT DISTINCT tr.person_id, ap.housing_array_id
-            FROM time_reports tr
-            JOIN apartments ap ON ap.id = tr.apartment_id
-            WHERE EXTRACT(YEAR FROM tr.date) = %s
-              AND EXTRACT(MONTH FROM tr.date) = %s
-        """, (year, month)).fetchall()
-        for r in rows:
-            person_to_housing[r["person_id"]] = r["housing_array_id"]
+        for person in summary_data:
+            person_id = person["person_id"]
+            total_payment = person["totals"].get("total_payment", 0)
 
-    # שימוש ב-cache
-    summary_data, _ = _get_cached_summary(year, month)
+            if total_payment <= 0:
+                continue
 
-    # איחוד לפי מערך דיור
-    totals_by_housing = defaultdict(float)
-    for person in summary_data:
-        person_id = person["person_id"]
-        total = person["totals"].get("total_payment", 0)
-        housing_id = person_to_housing.get(person_id)
-        if housing_id:
-            totals_by_housing[housing_id] += total
+            # מציאת כל מערכי הדיור שהמדריך עבד בהם
+            housing_arrays = conn.execute("""
+                SELECT DISTINCT ha.name
+                FROM time_reports tr
+                JOIN apartments ap ON ap.id = tr.apartment_id
+                JOIN housing_arrays ha ON ha.id = ap.housing_array_id
+                WHERE tr.person_id = %s
+                  AND EXTRACT(YEAR FROM tr.date) = %s
+                  AND EXTRACT(MONTH FROM tr.date) = %s
+            """, (person_id, year, month)).fetchall()
 
-    # בניית הנתונים לגרף
-    labels = []
-    data = []
-    for housing_id, total in sorted(totals_by_housing.items(), key=lambda x: x[1], reverse=True):
-        name = housing_arrays.get(housing_id, f"מערך {housing_id}")
-        labels.append(name)
-        data.append(total)
+            # הוספת כל השכר של המדריך לכל מערך שעבד בו
+            for row in housing_arrays:
+                totals_by_housing[row["name"]] += total_payment
+
+    # בניית הנתונים לגרף - מיון לפי סכום
+    sorted_housing = sorted(totals_by_housing.items(), key=lambda x: x[1], reverse=True)
+
+    labels = [name for name, _ in sorted_housing]
+    data = [round(total, 2) for _, total in sorted_housing]
+
+    # הסכום הכולל מה-cache - זהה לייצוא שכר
+    grand_total = grand_totals.get("total_payment", 0)
 
     return JSONResponse({
         "labels": labels,
@@ -142,7 +143,8 @@ def get_salary_by_housing_array(year: int, month: int) -> JSONResponse:
             "label": "שכר כולל (ש\"ח)",
             "data": data,
             "backgroundColor": _generate_colors(len(data))
-        }]
+        }],
+        "total": round(grand_total, 2)
     })
 
 
@@ -344,27 +346,10 @@ def get_all_stats(year: int, month: int) -> JSONResponse:
     """
     from collections import defaultdict
 
-    # שליפת נתוני בסיס
+    # שליפת נתוני בסיס - אותו חישוב כמו ייצוא שכר
     summary_data, grand_totals = _get_cached_summary(year, month)
 
     with get_conn() as conn:
-        # מערכי דיור
-        housing_arrays = {}
-        rows = conn.execute("SELECT id, name FROM housing_arrays").fetchall()
-        for r in rows:
-            housing_arrays[r["id"]] = r["name"]
-
-        # קישור מדריך -> מערך
-        person_to_housing = {}
-        rows = conn.execute("""
-            SELECT DISTINCT tr.person_id, ap.housing_array_id
-            FROM time_reports tr
-            JOIN apartments ap ON ap.id = tr.apartment_id
-            WHERE EXTRACT(YEAR FROM tr.date) = %s AND EXTRACT(MONTH FROM tr.date) = %s
-        """, (year, month)).fetchall()
-        for r in rows:
-            person_to_housing[r["person_id"]] = r["housing_array_id"]
-
         # סוגי משמרות
         shift_rows = conn.execute("""
             SELECT st.name, COUNT(*) as count
@@ -374,18 +359,35 @@ def get_all_stats(year: int, month: int) -> JSONResponse:
             GROUP BY st.id, st.name ORDER BY count DESC
         """, (year, month)).fetchall()
 
-    # === חישוב שכר לפי מערך ===
-    totals_by_housing = defaultdict(float)
-    for person in summary_data:
-        housing_id = person_to_housing.get(person["person_id"])
-        if housing_id:
-            totals_by_housing[housing_id] += person["totals"].get("total_payment", 0)
+        # === חישוב שכר לפי מערך - מדריך מופיע בכל מערך שעבד בו ===
+        totals_by_housing = defaultdict(float)
 
-    housing_labels = []
-    housing_data = []
-    for hid, total in sorted(totals_by_housing.items(), key=lambda x: x[1], reverse=True):
-        housing_labels.append(housing_arrays.get(hid, f"מערך {hid}"))
-        housing_data.append(total)
+        for person in summary_data:
+            person_id = person["person_id"]
+            total_payment = person["totals"].get("total_payment", 0)
+
+            if total_payment <= 0:
+                continue
+
+            # מציאת כל מערכי הדיור שהמדריך עבד בהם
+            housing_arrays = conn.execute("""
+                SELECT DISTINCT ha.name
+                FROM time_reports tr
+                JOIN apartments ap ON ap.id = tr.apartment_id
+                JOIN housing_arrays ha ON ha.id = ap.housing_array_id
+                WHERE tr.person_id = %s
+                  AND EXTRACT(YEAR FROM tr.date) = %s
+                  AND EXTRACT(MONTH FROM tr.date) = %s
+            """, (person_id, year, month)).fetchall()
+
+            # הוספת כל השכר לכל מערך
+            for row in housing_arrays:
+                totals_by_housing[row["name"]] += total_payment
+
+    # מיון לפי סכום
+    sorted_housing = sorted(totals_by_housing.items(), key=lambda x: x[1], reverse=True)
+    housing_labels = [name for name, _ in sorted_housing]
+    housing_data = [round(total, 2) for _, total in sorted_housing]
 
     # === שכר לפי מדריך ===
     sorted_guides = sorted(summary_data, key=lambda x: x["totals"].get("total_payment", 0), reverse=True)[:20]

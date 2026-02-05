@@ -72,6 +72,8 @@ from routes.stats import (
     get_apartments_list,
     get_guides_list,
 )
+from routes.auth import login_page, login_submit, logout
+from core.auth import validate_session_token, SESSION_COOKIE_NAME
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -136,6 +138,48 @@ class DemoModeMiddleware(BaseHTTPMiddleware):
 
 
 app.add_middleware(DemoModeMiddleware)
+
+
+# Middleware לאימות משתמשים
+class AuthMiddleware(BaseHTTPMiddleware):
+    """Middleware לבדיקת התחברות בכל בקשה."""
+
+    # נתיבים שלא דורשים התחברות
+    PUBLIC_ROUTES = {"/login", "/static", "/health"}
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+
+        # בדיקת session cookie
+        token = request.cookies.get(SESSION_COOKIE_NAME)
+        user = validate_session_token(token) if token else None
+
+        # שמירת פרטי המשתמש ב-request state (גם אם None)
+        request.state.current_user = user
+
+        # נתיבים ציבוריים - לא צריך בדיקה
+        if any(path.startswith(route) for route in self.PUBLIC_ROUTES):
+            return await call_next(request)
+
+        if not user:
+            # הפניה לעמוד התחברות עבור בקשות HTML
+            if "text/html" in request.headers.get("accept", ""):
+                return RedirectResponse(url="/login", status_code=303)
+            # שגיאה 401 עבור בקשות API
+            return JSONResponse(
+                {"error": "לא מחובר למערכת"},
+                status_code=401
+            )
+
+        # עבור מנהל מסגרת - כפה סינון לפי המערך שלו
+        if user.get("role") == "framework_manager" and user.get("housing_array_id"):
+            set_housing_array_filter(user["housing_array_id"])
+
+        response = await call_next(request)
+        return response
+
+
+app.add_middleware(AuthMiddleware)
 
 # Mount static files
 if config.STATIC_DIR:
@@ -217,6 +261,25 @@ def health_check():
             "database": "disconnected",
             "error": str(e)
         }, 503
+
+
+# Auth routes
+@app.get("/login", response_class=HTMLResponse)
+def login_route(request: Request, error: str = None):
+    """עמוד התחברות."""
+    return login_page(request, error)
+
+
+@app.post("/login")
+async def login_submit_route(request: Request):
+    """עיבוד טופס התחברות."""
+    return await login_submit(request)
+
+
+@app.get("/logout")
+def logout_route(request: Request):
+    """התנתקות מהמערכת."""
+    return logout(request)
 
 
 @app.get("/", response_class=HTMLResponse)
