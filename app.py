@@ -669,13 +669,14 @@ def housing_array_status(request: Request):
 @app.on_event("startup")
 async def startup_event():
     """Handle application startup - ensure database has required codes."""
-    from core.logic import ensure_sick_payment_code
+    from core.logic import ensure_sick_payment_code, ensure_professional_support_code
     from core.database import get_conn
     try:
         with get_conn() as conn:
             ensure_sick_payment_code(conn.conn)
+            ensure_professional_support_code(conn.conn)
     except Exception as e:
-        logger.warning(f"Could not ensure sick payment code on startup: {e}")
+        logger.warning(f"Could not ensure payment codes on startup: {e}")
 
 
 @app.on_event("shutdown")

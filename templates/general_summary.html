@@ -56,6 +56,7 @@
     {% set ns = namespace(
         standby='',
         travel='',
+        professional_support='',
         extras=''
     ) %}
     {% for code in payment_codes %}
@@ -63,6 +64,8 @@
             {% set ns.standby = code.merav_code %}
         {% elif code.internal_key == 'travel' %}
             {% set ns.travel = code.merav_code %}
+        {% elif code.internal_key == 'professional_support' %}
+            {% set ns.professional_support = code.merav_code %}
         {% elif code.internal_key == 'extras' %}
             {% set ns.extras = code.merav_code %}
         {% endif %}
@@ -87,11 +90,16 @@
                     <th onclick="sortTable(12)" style="cursor: pointer; padding: 2px 4px; background: #dbeafe; width: 55px; text-align: right;" title="כוננויות">כוננויות<div style="font-size: 9px; color: #888;">{{ ns.standby }}</div></th>
                     <th onclick="sortTable(13)" style="cursor: pointer; padding: 2px 4px; background: #fef3c7; width: 55px; text-align: right;" title="נסיעות">נסיעות<div style="font-size: 9px; color: #888;">{{ ns.travel }}</div></th>
                     <th onclick="sortTable(14)" style="cursor: pointer; padding: 2px 4px; background: #f3e8ff; width: 55px; text-align: right;" title="תוספות">תוספות<div style="font-size: 9px; color: #888;">{{ ns.extras }}</div></th>
-                    <th onclick="sortTable(15)" style="cursor: pointer; padding: 2px 4px; background: #e7f5ff; font-weight: bold; width: 70px; text-align: right;">סה"כ</th>
+                    <th onclick="sortTable(15)" style="cursor: pointer; padding: 2px 4px; background: #d1fae5; width: 55px; text-align: right;" title="תומך מקצועי">ת.מקצועי<div style="font-size: 9px; color: #888;">{{ ns.professional_support }}</div></th>
+                    <th onclick="sortTable(16)" style="cursor: pointer; padding: 2px 4px; background: #e7f5ff; font-weight: bold; width: 70px; text-align: right;">סה"כ</th>
                 </tr>
             </thead>
             <tbody>
+                {# namespace לצבירת סה"כ מהשורות המוצגות - מונע פער floating point #}
+                {% set display_ns = namespace(total=0) %}
                 {% for row in summary_data %}
+                {% set row_payment = row.totals.rounded_total or row.totals.total_payment or 0 %}
+                {% set display_ns.total = display_ns.total + row_payment %}
                 <tr class="data-row" data-name="{{ row.name|lower }}">
                     <td style="position: sticky; right: 0; background: #fff; z-index: 1; border-left: 2px solid #eee; font-weight: bold; padding: 2px 6px;">
                         <a href="/guide/{{ row.person_id }}?year={{ selected_year }}&month={{ selected_month }}" style="text-decoration: none; color: #0969da; font-size: 12px;" title="לחץ לצפייה בדוח מפורט">{{ row.name }}</a>
@@ -110,7 +118,8 @@
                     <td style="text-align: right; padding: 2px; background: #eff6ff;">{% if row.totals.standby_payment and row.totals.standby_payment > 0 %}{{ "%.0f"|format(row.totals.standby_payment) }}{% else %}<span style="color:#ddd;">-</span>{% endif %}</td>
                     <td style="text-align: right; padding: 2px; background: #fef3c7;">{% if row.totals.travel and row.totals.travel > 0 %}{{ "%.0f"|format(row.totals.travel) }}{% else %}<span style="color:#ddd;">-</span>{% endif %}</td>
                     <td style="text-align: right; padding: 2px; background: #f3e8ff;">{% if row.totals.extras and row.totals.extras > 0 %}{{ "%.0f"|format(row.totals.extras) }}{% else %}<span style="color:#ddd;">-</span>{% endif %}</td>
-                    <td style="background: #e7f5ff; font-weight: bold; padding: 2px; text-align: right;">{{ "{:,.2f}".format((row.totals.rounded_total or row.totals.total_payment or 0)) }}</td>
+                    <td style="text-align: right; padding: 2px; background: #d1fae5;">{% if row.totals.professional_support and row.totals.professional_support > 0 %}{{ "%.0f"|format(row.totals.professional_support) }}{% else %}<span style="color:#ddd;">-</span>{% endif %}</td>
+                    <td style="background: #e7f5ff; font-weight: bold; padding: 2px; text-align: right;">{{ "{:,.2f}".format(row_payment) }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -132,7 +141,9 @@
                     <td style="text-align: right; padding: 2px; background: #1e40af;">{% if grand_totals.standby_payment and grand_totals.standby_payment > 0 %}{{ "%.0f"|format(grand_totals.standby_payment) }}{% endif %}</td>
                     <td style="text-align: right; padding: 2px; background: #92400e;">{% if grand_totals.travel and grand_totals.travel > 0 %}{{ "%.0f"|format(grand_totals.travel) }}{% endif %}</td>
                     <td style="text-align: right; padding: 2px; background: #6b21a8;">{% if grand_totals.extras and grand_totals.extras > 0 %}{{ "%.0f"|format(grand_totals.extras) }}{% endif %}</td>
-                    <td style="background: #444; padding: 2px; text-align: right;">{{ "{:,.2f}".format(grand_totals.rounded_total or 0) }}</td>
+                    <td style="text-align: right; padding: 2px; background: #065f46;">{% if grand_totals.professional_support and grand_totals.professional_support > 0 %}{{ "%.0f"|format(grand_totals.professional_support) }}{% endif %}</td>
+                    {# שימוש בסכום המוצג למניעת פער floating point #}
+                    <td style="background: #444; padding: 2px; text-align: right;">{{ "{:,.2f}".format(display_ns.total | round(2)) }}</td>
                 </tr>
             </tfoot>
         </table>

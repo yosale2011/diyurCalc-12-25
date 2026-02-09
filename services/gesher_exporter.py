@@ -62,6 +62,7 @@ def load_export_config_from_db(conn) -> Dict[str, Tuple[str, str, str]]:
 
             # סכומים ישירים
             'travel': 'money',
+            'professional_support': 'money',
             'extras': 'money',
             
             # נתונים אינפורמטיביים
@@ -175,7 +176,7 @@ def calculate_value(totals: Dict, internal_key: str, value_type: str, minimum_wa
         return (0.0, round(raw_value, 2))
     
     elif value_type.startswith('hours_'):
-        # שעות עם תעריף - מחזיר שעות (ממירות לשעות) ותעריף לשעה
+        # שעות עם תעריף - מחזיר שעות ותעריף לשעה
         multiplier_str = value_type.replace('hours_', '')
         try:
             multiplier = float(multiplier_str) / 100  # hours_100 -> 1.0, hours_125 -> 1.25

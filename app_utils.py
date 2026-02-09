@@ -14,7 +14,7 @@ import psycopg2.extras
 
 from core.history import (
     get_apartment_type_for_month, get_person_status_for_month,
-    get_all_housing_rates_for_month
+    get_all_housing_rates_for_month, get_all_apartment_type_change_dates
 )
 from core.database import get_housing_array_filter
 from core.sick_days import _identify_sick_day_sequences, get_sick_payment_rate
@@ -30,6 +30,7 @@ from core.constants import (
     TAGBUR_FRIDAY_SHIFT_ID,
     TAGBUR_SHABBAT_SHIFT_ID,
     HOSPITAL_ESCORT_SHIFT_ID,
+    WORK_HOUR_SHIFT_ID,
     # Shift ID groups
     SHABBAT_SHIFT_IDS,
     TAGBUR_SHIFT_IDS,
@@ -1062,6 +1063,9 @@ def get_daily_segments_data(
     if housing_rates_cache is None:
         housing_rates_cache = get_all_housing_rates_for_month(conn, year, month)
 
+    # Build apartment type change dates cache
+    apartment_change_dates = get_all_apartment_type_change_dates(conn, list(apartment_ids))
+
     # Apply historical overrides to reports
     processed_reports = []
     for r in reports:
@@ -1085,6 +1089,10 @@ def get_daily_segments_data(
         # Override is_married
         if historical_is_married is not None:
             r_dict["is_married"] = historical_is_married
+
+        # Add apartment type change date
+        apt_id = r_dict.get("apartment_id")
+        r_dict["apartment_type_change_date"] = apartment_change_dates.get(apt_id)
 
         processed_reports.append(r_dict)
 
@@ -1150,6 +1158,27 @@ def get_daily_segments_data(
         apt_type_id = r.get("apartment_type_id")
         if apt_type_id and apt_type_id not in apt_type_supplement:
             apt_type_supplement[apt_type_id] = r.get("hourly_wage_supplement") or 0
+
+    # טעינת תעריפי "שעת עבודה" לכל housing_array_id שנמצא בדיווחים
+    # כי Uncovered Minutes ישולמו לפי תעריף זה
+    all_housing_arrays = {r.get("housing_array_id") for r in reports if r.get("housing_array_id")}
+    for ha_id in all_housing_arrays:
+        rate_key = (WORK_HOUR_SHIFT_ID, ha_id)
+        if rate_key not in shift_rates:
+            # יצירת report מדומה לחישוב התעריף
+            dummy_report = {
+                "shift_type_id": WORK_HOUR_SHIFT_ID,
+                "housing_array_id": ha_id,
+                "is_married": True,
+                "hourly_wage_supplement": 0
+            }
+            weekday_rate = get_effective_hourly_rate(
+                dummy_report, minimum_wage, is_shabbat=False, housing_rates_cache=housing_rates_cache
+            )
+            shabbat_rate = get_effective_hourly_rate(
+                dummy_report, minimum_wage, is_shabbat=True, housing_rates_cache=housing_rates_cache
+            )
+            shift_rates[rate_key] = {"weekday": weekday_rate, "shabbat": shabbat_rate}
 
     daily_map = {}
     
@@ -1382,11 +1411,12 @@ def get_daily_segments_data(
                 apartment_type_name = r.get("apartment_type_name", "")
                 housing_array_name = r.get("housing_array_name", "")
                 rate_apartment_type_name = r.get("rate_apartment_type_name", "")
+                apartment_type_change_date = r.get("apartment_type_change_date", "")
 
                 # For fixed segment shifts (tagbur/vacation/sick), standby_defined_end = seg_end (full standby)
                 standby_defined_end = seg_end if effective_seg_type == "standby" else None
                 housing_array_id = r.get("housing_array_id")
-                entry["segments"].append((seg_start, seg_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, actual_seg_date, actual_apartment_type_id, standby_defined_end, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name))
+                entry["segments"].append((seg_start, seg_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, actual_seg_date, actual_apartment_type_id, standby_defined_end, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name, apartment_type_change_date))
 
             continue  # דלג על העיבוד הרגיל עבור משמרת זו
 
@@ -1595,13 +1625,14 @@ def get_daily_segments_data(
                     apartment_type_name = r.get("apartment_type_name", "")
                     housing_array_name = r.get("housing_array_name", "")
                     rate_apartment_type_name = r.get("rate_apartment_type_name", "")
+                    apartment_type_change_date = r.get("apartment_type_change_date", "")
 
                     # Store actual_date (p_date) for correct Shabbat calculation even when displayed under different day
                     # For standby segments, also store the defined end time (before min with report end)
                     # to detect early exit: if eff_end < standby_defined_end, it's early exit
                     standby_defined_end = current_seg_end if effective_seg_type == "standby" else None
                     housing_array_id = r.get("housing_array_id")
-                    entry["segments"].append((eff_start, eff_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, p_date, actual_apartment_type_id, standby_defined_end, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name))
+                    entry["segments"].append((eff_start, eff_end, effective_seg_type, label, r["shift_type_id"], segment_id, apartment_type_id, is_married, apartment_name, p_date, actual_apartment_type_id, standby_defined_end, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name, apartment_type_change_date))
                     
                 # Uncovered minutes -> work
                 # חישוב שעות עבודה שלא מכוסות ע"י סגמנטים מוגדרים
@@ -1622,6 +1653,7 @@ def get_daily_segments_data(
                     apartment_type_name = r.get("apartment_type_name", "")
                     housing_array_name = r.get("housing_array_name", "")
                     rate_apartment_type_name = r.get("rate_apartment_type_name", "")
+                    apartment_type_change_date = r.get("apartment_type_change_date", "")
                     housing_array_id = r.get("housing_array_id")
 
                     for uncov_start, uncov_end in uncovered_intervals:
@@ -1637,12 +1669,12 @@ def get_daily_segments_data(
                             eff_uncov_start = uncov_start
                             eff_uncov_end = uncov_end
 
-                        # הוספת סגמנט עבודה - האחוז יחושב ע"י מנגנון הרצפים
+                        # הוספת סגמנט עבודה - שעות מחוץ לסגמנטים מוגדרים משולמות לפי תעריף "שעת עבודה"
                         entry["segments"].append((
                             eff_uncov_start, eff_uncov_end, "work", "work",
-                            r["shift_type_id"], segment_id,
+                            WORK_HOUR_SHIFT_ID, segment_id,
                             apartment_type_id, is_married,
-                            apartment_name, p_date, actual_apartment_type_id, None, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name
+                            apartment_name, p_date, actual_apartment_type_id, None, housing_array_id, apartment_type_name, housing_array_name, rate_apartment_type_name, apartment_type_change_date
                         ))
 
     # Process Daily Segments
@@ -1734,12 +1766,12 @@ def get_daily_segments_data(
         sick_segments = []
 
         for seg_entry in raw_segments:
-            # Normalize length to 16 (now includes rate_apartment_type_name)
-            if len(seg_entry) < 16:
+            # Normalize length to 17 (now includes apartment_type_change_date)
+            if len(seg_entry) < 17:
                 # Pad with None
-                seg_entry = seg_entry + (None,) * (16 - len(seg_entry))
+                seg_entry = seg_entry + (None,) * (17 - len(seg_entry))
 
-            s_start, s_end, s_type, label, sid, seg_id, apt_type, married, apt_name, actual_date, actual_apt_type, standby_defined_end, housing_array_id, apt_type_name, ha_name, rate_apt_type_name = seg_entry
+            s_start, s_end, s_type, label, sid, seg_id, apt_type, married, apt_name, actual_date, actual_apt_type, standby_defined_end, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date = seg_entry
 
             if s_type == "standby":
                 # Include shift_type_id (sid) for priority selection when merging
@@ -1750,7 +1782,7 @@ def get_daily_segments_data(
             elif s_type == "sick":
                 sick_segments.append((s_start, s_end, actual_date))
             else:
-                work_segments.append((s_start, s_end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name))
+                work_segments.append((s_start, s_end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date))
                 
         work_segments.sort(key=lambda x: x[0])
         standby_segments.sort(key=lambda x: x[0])
@@ -1765,7 +1797,7 @@ def get_daily_segments_data(
             if k not in seen:
                 deduped.append(w)
                 seen.add(k)
-        work_segments = deduped  # Each is (start, end, label, sid, apt_name, actual_date, apt_type, actual_apt_type)
+        work_segments = deduped  # Each is (start, end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date)
 
         # Note: Night chain detection is now done per-chain, not per-day
         # A chain is a "night chain" if it has 2+ hours in 22:00-06:00 range
@@ -1830,9 +1862,10 @@ def get_daily_segments_data(
             if is_early_exit:
                 # יציאה מוקדמת - הכוננות החלקית הופכת לשעות עבודה שממשיכות את הרצף
                 # הוספה לרשימת סגמנטי עבודה במקום כוננות
+                # (start, end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date)
                 early_exit_work_segments.append((
                     sb_start, sb_end, "כוננות חלקית", shift_type_id,
-                    "", actual_date, apt_type, actual_apt_type, None, "", ""
+                    "", actual_date, apt_type, actual_apt_type, None, "", "", "", ""
                 ))
                 # לא מוסיפים ל-trimmed_standbys ולא ל-cancelled_standbys
                 continue
@@ -1925,7 +1958,7 @@ def get_daily_segments_data(
             # עיבוד סגמנטי חופשה
             for s, e, actual_date in vacation_segments:
                 duration = e - s
-                pay = round(duration / 60, 2) * minimum_wage  # חופשה = 100% שכר מינימום (שעות מעוגלות)
+                pay = round(duration / 60, 2) * round(minimum_wage, 2)  # חופשה = שעות ותעריף מעוגלים (שיטת מירב)
                 d_calc100 += duration
                 d_payment += pay
 
@@ -1961,8 +1994,8 @@ def get_daily_segments_data(
                 sick_day_num = sick_day_sequence.get(sick_date, 1)
                 sick_rate = get_sick_payment_rate(sick_day_num)
 
-                # חישוב תשלום לפי האחוז המדורג (שעות מעוגלות)
-                pay = round(duration / 60, 2) * minimum_wage * sick_rate
+                # חישוב תשלום לפי האחוז המדורג - שעות ותעריף מעוגלים (שיטת מירב)
+                pay = round(duration / 60, 2) * round(minimum_wage, 2) * sick_rate
                 d_calc100 += duration
                 d_payment += pay
 
@@ -2043,7 +2076,7 @@ def get_daily_segments_data(
                 for chain in chains:
                     if chain.get("type") == "work" and chain.get("total_minutes", 0) < 60:
                         effective_rate = chain.get("effective_rate", minimum_wage)
-                        bonus_pay = (bonus_mins / 60) * effective_rate
+                        bonus_pay = round(bonus_mins / 60, 2) * round(effective_rate, 2)  # שיטת מירב
 
                         # תשלום בלבד - לא מוסיפים לדקות הרצף
                         d_payment += bonus_pay
@@ -2094,8 +2127,8 @@ def get_daily_segments_data(
 
         # Merge all events for processing - כל המשמרות כולל תגבור
         all_events = []
-        for s, e, l, sid, apt_name, actual_date, apt_type, actual_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name in work_segments:
-            all_events.append({"start": s, "end": e, "type": "work", "label": l, "shift_id": sid, "apartment_name": apt_name or "", "apartment_type_id": actual_apt_type, "rate_apt_type": apt_type, "actual_date": actual_date or day_date, "housing_array_id": housing_array_id, "apartment_type_name": apt_type_name or "", "housing_array_name": ha_name or "", "rate_apt_type_name": rate_apt_type_name or ""})
+        for s, e, l, sid, apt_name, actual_date, apt_type, actual_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date in work_segments:
+            all_events.append({"start": s, "end": e, "type": "work", "label": l, "shift_id": sid, "apartment_name": apt_name or "", "apartment_type_id": actual_apt_type, "rate_apt_type": apt_type, "actual_date": actual_date or day_date, "housing_array_id": housing_array_id, "apartment_type_name": apt_type_name or "", "housing_array_name": ha_name or "", "rate_apt_type_name": rate_apt_type_name or "", "apt_type_change_date": apt_type_change_date or ""})
         for s, e, seg_id, apt, married, actual_date, _shift_type_id, actual_apt_type, _standby_defined_end in standby_segments:
             all_events.append({"start": s, "end": e, "type": "standby", "label": "כוננות", "seg_id": seg_id, "apt": apt, "actual_apt_type": actual_apt_type, "married": married, "actual_date": actual_date or day_date})
         for s, e, actual_date in vacation_segments:
@@ -2120,13 +2153,13 @@ def get_daily_segments_data(
             # segments is list of (start, end, label, shift_id, apartment_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name)
             # Convert to format expected by _calculate_chain_wages: (start, end, shift_id, actual_date)
             # Include actual_date for each segment for correct Shabbat calculation
-            chain_segs = [(s, e, sid, adate) for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name in segments]
+            chain_segs = [(s, e, sid, adate) for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date in segments]
 
             # Calculate night hours in current chain segments
             # Times are in extended 00:00-32:00 axis (0-1920 minutes)
             # where 1440+ represents next day (00:00-08:00 after midnight)
             current_chain_night_minutes = 0
-            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name in segments:
+            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date in segments:
                 # Convert from extended 00:00-32:00 axis to 00:00-24:00 axis
                 real_start = s % 1440
                 real_end = e % 1440
@@ -2178,11 +2211,11 @@ def get_daily_segments_data(
                         multiplier = 1.25
                     else:
                         multiplier = 1.0
-                    # חישוב תשלום עם שעות מעוגלות
-                    c_pay += round(seg_minutes / 60, 2) * multiplier * seg_rate
+                    # חישוב תשלום עם שעות ותעריף מעוגלים (שיטת מירב)
+                    c_pay += round(seg_minutes / 60, 2) * multiplier * round(seg_rate, 2)
             else:
-                # חישוב תשלום עם שעות מעוגלות
-                c_pay = (round(c_100/60, 2)*1.0 + round(c_125/60, 2)*1.25 + round(c_150/60, 2)*1.5 + round(c_175/60, 2)*1.75 + round(c_200/60, 2)*2.0) * effective_rate
+                # חישוב תשלום עם שעות ותעריף מעוגלים (שיטת מירב)
+                c_pay = (round(c_100/60, 2)*1.0 + round(c_125/60, 2)*1.25 + round(c_150/60, 2)*1.5 + round(c_175/60, 2)*1.75 + round(c_200/60, 2)*2.0) * round(effective_rate, 2)
 
             return c_pay, c_100, c_125, c_150, c_175, c_200, seg_detail, effective_rate
 
@@ -2196,7 +2229,7 @@ def get_daily_segments_data(
             pay, c100, c125, c150, c175, c200, seg_detail, effective_rate = calculate_chain_pay(segments, minutes_offset, carryover_night_minutes)
 
             # Calculate total chain duration (including offset from previous day)
-            chain_duration = sum(e - s for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name in segments)
+            chain_duration = sum(e - s for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date in segments)
             chain_total_minutes = minutes_offset + chain_duration
 
             # Get apartment names and types from segments - segments is (start, end, label, sid, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name)
@@ -2208,7 +2241,7 @@ def get_daily_segments_data(
             chain_rate_apt_types = set()
             chain_apt_type_names = set()
             chain_ha_names = set()
-            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name in segments:
+            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date in segments:
                 if apt:
                     chain_apartments.add(apt)
                 if apt_type:
@@ -2249,7 +2282,7 @@ def get_daily_segments_data(
                 # מיון הסגמנטים המקוריים לפי זמן התחלה
                 sorted_segs = sorted(segs, key=lambda x: x[0])
 
-                for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name in sorted_segs:
+                for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date in sorted_segs:
                     # בדיקה אם יש חפיפה עם הטווח הנוכחי
                     if s < seg_end and e > current_start:
                         # זמן התחלה של החפיפה
@@ -2271,7 +2304,8 @@ def get_daily_segments_data(
                                 "housing_array_id": ha_id,
                                 "apt_type_name": apt_type_name,
                                 "ha_name": ha_name,
-                                "rate_apt_type_name": rate_apt_type_name
+                                "rate_apt_type_name": rate_apt_type_name,
+                                "apt_type_change_date": apt_type_change_date
                             })
                             current_start = overlap_end
 
@@ -2281,7 +2315,7 @@ def get_daily_segments_data(
                 # אם לא נמצאו חפיפות, החזר סגמנט בודד עם ברירת מחדל
                 if not result_segments:
                     if segs:
-                        s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name = segs[0]
+                        s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date = segs[0]
                         result_segments.append({
                             "start": seg_start,
                             "end": seg_end,
@@ -2295,7 +2329,8 @@ def get_daily_segments_data(
                             "housing_array_id": ha_id,
                             "apt_type_name": apt_type_name,
                             "ha_name": ha_name,
-                            "rate_apt_type_name": rate_apt_type_name
+                            "rate_apt_type_name": rate_apt_type_name,
+                            "apt_type_change_date": apt_type_change_date
                         })
                     else:
                         result_segments.append({
@@ -2311,7 +2346,8 @@ def get_daily_segments_data(
                             "housing_array_id": None,
                             "apt_type_name": "",
                             "ha_name": "",
-                            "rate_apt_type_name": ""
+                            "rate_apt_type_name": "",
+                            "apt_type_change_date": ""
                         })
 
                 return result_segments
@@ -2345,6 +2381,7 @@ def get_daily_segments_data(
                 seg_apt_type_name = sub_seg.get("apt_type_name", "")
                 seg_ha_name = sub_seg.get("ha_name", "")
                 seg_rate_apt_type_name = sub_seg.get("rate_apt_type_name", "")
+                seg_apt_type_change_date = sub_seg.get("apt_type_change_date", "")
 
                 seg_duration = seg_end - seg_start
 
@@ -2379,8 +2416,8 @@ def get_daily_segments_data(
                     # התוספת באגורות - ממירים לשקלים
                     seg_label = f"{seg_label} +{hourly_supplement / 100:.2f}"
 
-                # חישוב תשלום עם שעות מעוגלות (כדי שהתשלום יתאים לשעות המוצגות)
-                seg_pay = (round(seg_c100/60, 2)*1.0 + round(seg_c125/60, 2)*1.25 + round(seg_c150/60, 2)*1.5 + round(seg_c175/60, 2)*1.75 + round(seg_c200/60, 2)*2.0) * seg_rate
+                # חישוב תשלום עם שעות ותעריף מעוגלים (שיטת מירב)
+                seg_pay = (round(seg_c100/60, 2)*1.0 + round(seg_c125/60, 2)*1.25 + round(seg_c150/60, 2)*1.5 + round(seg_c175/60, 2)*1.75 + round(seg_c200/60, 2)*2.0) * round(seg_rate, 2)
 
                 start_str = f"{seg_start // 60 % 24:02d}:{seg_start % 60:02d}"
                 end_str = f"{seg_end // 60 % 24:02d}:{seg_end % 60:02d}"
@@ -2411,10 +2448,20 @@ def get_daily_segments_data(
 
                 # השתמש בדירה הספציפית של הסגמנט, לא של הרצף כולו
                 display_apt_name = seg_apt_name if seg_apt_name else apt_name
-                display_apt_type = seg_apt_type if seg_apt_type is not None else chain_apt_type
-                display_apt_type_name = seg_apt_type_name if seg_apt_type_name else chain_apt_type_name
+                # סוג דירה בפועל (להצגה וללב) - actual_apt_type, לא rate type
+                display_apt_type = seg_actual_apt if seg_actual_apt is not None else chain_apt_type
+                # שם סוג הדירה בפועל לפי ה-ID
+                display_apt_type_name = APT_TYPE_NAMES.get(display_apt_type, seg_apt_type_name or chain_apt_type_name)
                 display_ha_name = seg_ha_name if seg_ha_name else chain_ha_name
-                display_rate_apt_type_name = seg_rate_apt_type_name
+                # שם סוג דירה לתשלום - רק אם שונה מסוג הדירה בפועל
+                # seg_rate_apt = סוג לתשלום (מ-rate_apartment_type_id או היסטורי)
+                # seg_actual_apt = סוג הדירה בפועל
+                if seg_rate_apt is not None and seg_rate_apt != seg_actual_apt:
+                    display_rate_apt_type_name = APT_TYPE_NAMES.get(seg_rate_apt, seg_rate_apt_type_name or "")
+                else:
+                    display_rate_apt_type_name = ""
+                # תאריך שינוי סוג הדירה
+                display_apt_type_change_date = seg_apt_type_change_date
 
                 # קביעת סיבת מעבר שורה (אם לא השורה הראשונה)
                 # מציג את הסיבה בשורה הנוכחית (למה התחלנו שורה חדשה)
@@ -2462,6 +2509,7 @@ def get_daily_segments_data(
                     "apartment_type_id": display_apt_type,
                     "apartment_type_name": display_apt_type_name,
                     "rate_apartment_type_name": display_rate_apt_type_name,
+                    "apartment_type_change_date": display_apt_type_change_date,
                     "housing_array_name": display_ha_name,
                     "shift_name": seg_shift_name,
                     "shift_type": shift_type_label,
@@ -2480,7 +2528,7 @@ def get_daily_segments_data(
             # Calculate night minutes in this chain (for carryover to next day)
             # Times are in extended 00:00-32:00 axis (0-1920 minutes)
             chain_night_minutes = 0
-            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name in segments:
+            for s, e, l, sid, apt, adate, apt_type, actual_apt_type, rate_apt_type, ha_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date in segments:
                 # Convert from extended 00:00-32:00 axis to 00:00-24:00 axis
                 real_start = s % 1440
                 real_end = e % 1440
@@ -2661,7 +2709,7 @@ def get_daily_segments_data(
                 elif etype == "vacation" or etype == "sick":
                     duration = end - start
                     hrs = round(duration / 60, 2)  # שעות מעוגלות
-                    pay = hrs * minimum_wage
+                    pay = hrs * round(minimum_wage, 2)  # שיטת מירב
                     d_payment += pay
                     d_calc100 += duration  # מחלה/חופשה = 100%
 
@@ -2689,9 +2737,9 @@ def get_daily_segments_data(
                 last_end = end
                 last_etype = etype
             else:
-                # segments: (start, end, label, shift_id, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name)
+                # segments: (start, end, label, shift_id, apt_name, actual_date, apt_type, actual_apt_type, rate_apt_type, housing_array_id, apt_type_name, ha_name, rate_apt_type_name, apt_type_change_date)
                 # apt_type = rate_apt_type (לחישוב), actual_apt_type = apartment_type_id (להצגה)
-                current_chain_segments.append((start, end, event["label"], event["shift_id"], event.get("apartment_name", ""), event.get("actual_date"), event.get("rate_apt_type"), event.get("apartment_type_id"), event.get("rate_apt_type"), event.get("housing_array_id"), event.get("apartment_type_name", ""), event.get("housing_array_name", ""), event.get("rate_apt_type_name", "")))
+                current_chain_segments.append((start, end, event["label"], event["shift_id"], event.get("apartment_name", ""), event.get("actual_date"), event.get("rate_apt_type"), event.get("apartment_type_id"), event.get("rate_apt_type"), event.get("housing_array_id"), event.get("apartment_type_name", ""), event.get("housing_array_name", ""), event.get("rate_apt_type_name", ""), event.get("apt_type_change_date", "")))
                 last_end = end
                 last_etype = etype
 
@@ -2752,7 +2800,7 @@ def get_daily_segments_data(
             for chain in chains:
                 if chain.get("type") == "work" and chain.get("total_minutes", 0) < 60:
                     effective_rate = chain.get("effective_rate", minimum_wage)
-                    bonus_pay = (bonus_mins / 60) * effective_rate
+                    bonus_pay = round(bonus_mins / 60, 2) * round(effective_rate, 2)  # שיטת מירב
 
                     # תשלום בלבד - לא מוסיפים לדקות הרצף
                     d_payment += bonus_pay
@@ -2867,8 +2915,9 @@ def aggregate_daily_segments_to_monthly(
         "sick_days_accrued": 0.0,
         "vacation_days_accrued": 0.0,
 
-        # נסיעות ותוספות
+        # נסיעות, תומך מקצועי ותוספות
         "travel": 0.0,
+        "professional_support": 0.0,
         "extras": 0.0,
 
         # ימי עבודה
@@ -2918,33 +2967,36 @@ def aggregate_daily_segments_to_monthly(
                             "calc175": 0, "calc200": 0, "payment": 0.0
                         }
 
+                # תעריף מעוגל לחישוב (שיטת מירב)
+                rounded_rate = round(effective_rate, 2)
+
                 # שעות רגילות (100%)
                 c100 = chain.get("calc100", 0) or 0
                 if c100 > 0:
                     if is_variable_rate:
                         monthly_totals["calc_variable"] += c100
-                        monthly_totals["payment_calc_variable"] += (c100 / 60) * 1.0 * effective_rate
+                        monthly_totals["payment_calc_variable"] += round(c100 / 60, 2) * 1.0 * rounded_rate
                         monthly_totals["variable_rate_value"] = effective_rate
                         # שמירה גם במבנה החדש
                         monthly_totals["variable_rates"][rate_key]["calc100"] += c100
-                        monthly_totals["variable_rates"][rate_key]["payment"] += (c100 / 60) * 1.0 * effective_rate
+                        monthly_totals["variable_rates"][rate_key]["payment"] += round(c100 / 60, 2) * 1.0 * rounded_rate
                     else:
                         monthly_totals["calc100"] += c100
-                        monthly_totals["payment_calc100"] += (c100 / 60) * 1.0 * effective_rate
+                        monthly_totals["payment_calc100"] += round(c100 / 60, 2) * 1.0 * rounded_rate
 
                 # שעות נוספות 125%
                 c125 = chain.get("calc125", 0) or 0
                 if c125 > 0:
                     if is_variable_rate:
                         monthly_totals["calc_variable"] += c125
-                        monthly_totals["payment_calc_variable"] += (c125 / 60) * 1.25 * effective_rate
+                        monthly_totals["payment_calc_variable"] += round(c125 / 60, 2) * 1.25 * rounded_rate
                         monthly_totals["variable_rate_value"] = effective_rate
                         # שמירה גם במבנה החדש
                         monthly_totals["variable_rates"][rate_key]["calc125"] += c125
-                        monthly_totals["variable_rates"][rate_key]["payment"] += (c125 / 60) * 1.25 * effective_rate
+                        monthly_totals["variable_rates"][rate_key]["payment"] += round(c125 / 60, 2) * 1.25 * rounded_rate
                     else:
                         monthly_totals["calc125"] += c125
-                        monthly_totals["payment_calc125"] += (c125 / 60) * 1.25 * effective_rate
+                        monthly_totals["payment_calc125"] += round(c125 / 60, 2) * 1.25 * rounded_rate
 
                 # שעות נוספות 150% (כולל הפרדה בין חול לשבת)
                 c150 = chain.get("calc150", 0) or 0
@@ -2954,52 +3006,52 @@ def aggregate_daily_segments_to_monthly(
                 if c150 > 0:
                     if is_variable_rate:
                         monthly_totals["calc_variable"] += c150
-                        monthly_totals["payment_calc_variable"] += (c150 / 60) * 1.5 * effective_rate
+                        monthly_totals["payment_calc_variable"] += round(c150 / 60, 2) * 1.5 * rounded_rate
                         monthly_totals["variable_rate_value"] = effective_rate
                         # שמירה גם במבנה החדש
                         monthly_totals["variable_rates"][rate_key]["calc150"] += c150
-                        monthly_totals["variable_rates"][rate_key]["payment"] += (c150 / 60) * 1.5 * effective_rate
+                        monthly_totals["variable_rates"][rate_key]["payment"] += round(c150 / 60, 2) * 1.5 * rounded_rate
                     else:
                         monthly_totals["calc150"] += c150
-                        monthly_totals["payment_calc150"] += (c150 / 60) * 1.5 * effective_rate
+                        monthly_totals["payment_calc150"] += round(c150 / 60, 2) * 1.5 * rounded_rate
 
                         # הפרדה בין שבת לחול
                         if c150_shabbat > 0:
                             monthly_totals["calc150_shabbat"] += c150_shabbat
                             monthly_totals["calc150_shabbat_100"] += c150_shabbat
                             monthly_totals["calc150_shabbat_50"] += c150_shabbat
-                            monthly_totals["payment_calc150_shabbat"] += (c150_shabbat / 60) * 1.5 * effective_rate
+                            monthly_totals["payment_calc150_shabbat"] += round(c150_shabbat / 60, 2) * 1.5 * rounded_rate
                         if c150_overtime > 0:
                             monthly_totals["calc150_overtime"] += c150_overtime
-                            monthly_totals["payment_calc150_overtime"] += (c150_overtime / 60) * 1.5 * effective_rate
+                            monthly_totals["payment_calc150_overtime"] += round(c150_overtime / 60, 2) * 1.5 * rounded_rate
 
                 # שעות שבת 175%
                 c175 = chain.get("calc175", 0) or 0
                 if c175 > 0:
                     if is_variable_rate:
                         monthly_totals["calc_variable"] += c175
-                        monthly_totals["payment_calc_variable"] += (c175 / 60) * 1.75 * effective_rate
+                        monthly_totals["payment_calc_variable"] += round(c175 / 60, 2) * 1.75 * rounded_rate
                         monthly_totals["variable_rate_value"] = effective_rate
                         # שמירה גם במבנה החדש
                         monthly_totals["variable_rates"][rate_key]["calc175"] += c175
-                        monthly_totals["variable_rates"][rate_key]["payment"] += (c175 / 60) * 1.75 * effective_rate
+                        monthly_totals["variable_rates"][rate_key]["payment"] += round(c175 / 60, 2) * 1.75 * rounded_rate
                     else:
                         monthly_totals["calc175"] += c175
-                        monthly_totals["payment_calc175"] += (c175 / 60) * 1.75 * effective_rate
+                        monthly_totals["payment_calc175"] += round(c175 / 60, 2) * 1.75 * rounded_rate
 
                 # שעות שבת 200%
                 c200 = chain.get("calc200", 0) or 0
                 if c200 > 0:
                     if is_variable_rate:
                         monthly_totals["calc_variable"] += c200
-                        monthly_totals["payment_calc_variable"] += (c200 / 60) * 2.0 * effective_rate
+                        monthly_totals["payment_calc_variable"] += round(c200 / 60, 2) * 2.0 * rounded_rate
                         monthly_totals["variable_rate_value"] = effective_rate
                         # שמירה גם במבנה החדש
                         monthly_totals["variable_rates"][rate_key]["calc200"] += c200
-                        monthly_totals["variable_rates"][rate_key]["payment"] += (c200 / 60) * 2.0 * effective_rate
+                        monthly_totals["variable_rates"][rate_key]["payment"] += round(c200 / 60, 2) * 2.0 * rounded_rate
                     else:
                         monthly_totals["calc200"] += c200
-                        monthly_totals["payment_calc200"] += (c200 / 60) * 2.0 * effective_rate
+                        monthly_totals["payment_calc200"] += round(c200 / 60, 2) * 2.0 * rounded_rate
 
                 # בונוס ליווי רפואי (תשלום בלבד, לא נספר בשעות)
                 escort_bonus = chain.get("escort_bonus_pay", 0) or 0
@@ -3040,8 +3092,8 @@ def aggregate_daily_segments_to_monthly(
     # ימי חופשה שנוצלו
     monthly_totals["vacation_days_taken"] = len(vacation_days_set)
 
-    # תשלום חופשה (שעות מעוגלות)
-    monthly_totals["vacation_payment"] = round(monthly_totals["vacation_minutes"] / 60, 2) * minimum_wage
+    # תשלום חופשה - שעות ותעריף מעוגלים (שיטת מירב)
+    monthly_totals["vacation_payment"] = round(monthly_totals["vacation_minutes"] / 60, 2) * round(minimum_wage, 2)
     monthly_totals["vacation"] = monthly_totals["vacation_minutes"]
 
     # ימי מחלה שנוצלו (התשלום כבר חושב בלולאה עם האחוזים המדורגים)
@@ -3076,8 +3128,11 @@ def aggregate_daily_segments_to_monthly(
 
     for pc in payment_comps:
         amount = (pc["total_amount"] or 0) / 100
-        if pc["component_type_id"] == 2 or pc["component_type_id"] == 7:
+        component_type = pc["component_type_id"]
+        if component_type == 2 or component_type == 7:
             monthly_totals["travel"] += amount
+        elif component_type == 13:
+            monthly_totals["professional_support"] += amount
         else:
             monthly_totals["extras"] += amount
 
@@ -3131,21 +3186,28 @@ def aggregate_daily_segments_to_monthly(
         monthly_totals["sick_payment"] +
         monthly_totals["standby_payment"] +
         monthly_totals["travel"] +
+        monthly_totals["professional_support"] +
         monthly_totals["extras"]
     )
 
     # שמירת שכר אפקטיבי
     monthly_totals["effective_hourly_rate"] = minimum_wage
 
-    # חישוב סה"כ מעוגל - סכום כל התשלומים היומיים (שכבר מחושבים עם שעות מעוגלות)
-    # payment = עבודה + חופשה + מחלה (כולל בונוסים)
-    # standby_payment = כוננויות
-    # travel + extras = נסיעות ותוספות
+    # חישוב סה"כ מעוגל - סכום הרכיבים הבודדים (תואם לתצוגה בתבנית)
+    # שיטת מירב: סכום כל payment_calc* + vacation + sick + standby + travel + extras
     rounded_total = (
-        monthly_totals["payment"] +
-        monthly_totals["standby_payment"] +
-        monthly_totals["travel"] +
-        monthly_totals["extras"]
+        monthly_totals.get("payment_calc100", 0) +
+        monthly_totals.get("payment_calc125", 0) +
+        monthly_totals.get("payment_calc150", 0) +
+        monthly_totals.get("payment_calc175", 0) +
+        monthly_totals.get("payment_calc200", 0) +
+        monthly_totals.get("payment_calc_variable", 0) +
+        monthly_totals.get("vacation_payment", 0) +
+        monthly_totals.get("sick_payment", 0) +
+        monthly_totals.get("standby_payment", 0) +
+        monthly_totals.get("travel", 0) +
+        monthly_totals.get("professional_support", 0) +
+        monthly_totals.get("extras", 0)
     )
 
     monthly_totals["rounded_total"] = round(rounded_total, 2)

@@ -325,6 +325,7 @@ def guide_view(
     # Build simple_summary from daily_segments chains (correct calculation)
     standby_payment_total = monthly_totals.get('standby_payment', 0) or 0
     travel_payment = monthly_totals.get('travel', 0) or 0
+    professional_support_payment = monthly_totals.get('professional_support', 0) or 0
     extras_payment = monthly_totals.get('extras', 0) or 0
     simple_summary = {
         "night": {"count": 0, "payment": 0},      # משמרת לילה
@@ -338,6 +339,7 @@ def guide_view(
             "payment_total": standby_payment_total
         },
         "travel": travel_payment,
+        "professional_support": professional_support_payment,
         "extras": extras_payment
     }
 

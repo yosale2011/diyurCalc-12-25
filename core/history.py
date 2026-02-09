@@ -519,3 +519,35 @@ def get_minimum_wage_for_month(conn, year: int, month: int) -> float:
         cursor.close()
 
 
+def get_all_apartment_type_change_dates(
+    conn, apartment_ids: List[int]
+) -> Dict[int, Optional[str]]:
+    """
+    טוען תאריכי שינוי סוג דירה לכל הדירות בשאילתה אחת.
+
+    מחזיר את התאריך האחרון שבו סוג הדירה השתנה (הרשומה האחרונה בהיסטוריה).
+    אם אין רשומה - הדירה לא השתנתה מעולם.
+
+    Returns:
+        dict mapping apartment_id to date string "MM/YYYY" or None
+    """
+    if not apartment_ids:
+        return {}
+
+    cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+    try:
+        cursor.execute("""
+            SELECT DISTINCT ON (apartment_id)
+                apartment_id, year, month
+            FROM apartment_status_history
+            WHERE apartment_id = ANY(%s)
+            ORDER BY apartment_id, year DESC, month DESC
+        """, (list(apartment_ids),))
+
+        result: Dict[int, Optional[str]] = {apt_id: None for apt_id in apartment_ids}
+        for row in cursor.fetchall():
+            result[row['apartment_id']] = f"{row['month']:02d}/{row['year']}"
+        return result
+    finally:
+        cursor.close()
+

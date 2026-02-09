@@ -31,6 +31,7 @@ TAGBUR_SHABBAT_POST_EXIT_MINUTES = 120  # שעתיים אחרי צאת שבת
 # Special shifts
 HOSPITAL_ESCORT_SHIFT_ID = 120  # משמרת ליווי בי"ח
 MEDICAL_ESCORT_SHIFT_ID = 148   # משמרת ליווי רפואי
+WORK_HOUR_SHIFT_ID = 138        # שעת עבודה (לשעות מחוץ לסגמנטים מוגדרים)
 
 # =============================================================================
 # Shift ID Groups

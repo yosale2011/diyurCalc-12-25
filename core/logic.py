@@ -172,6 +172,32 @@ def ensure_sick_payment_code(conn):
         logger.error(f"Error ensuring sick payment code: {e}")
 
 
+def ensure_professional_support_code(conn):
+    """
+    מוודא שקוד מירב 243 לתומך מקצועי קיים בטבלת payment_codes.
+    אם לא קיים, מוסיף אותו.
+    """
+    try:
+        cursor = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+
+        cursor.execute("""
+            SELECT id FROM payment_codes WHERE internal_key = 'professional_support'
+        """)
+        existing = cursor.fetchone()
+
+        if not existing:
+            cursor.execute("""
+                INSERT INTO payment_codes (internal_key, display_name, merav_code, display_order)
+                VALUES ('professional_support', 'תומך מקצועי', '243', 180)
+            """)
+            conn.commit()
+            logger.info("Added professional_support code (243) to payment_codes table")
+
+        cursor.close()
+    except Exception as e:
+        logger.error(f"Error ensuring professional support code: {e}")
+
+
 # =============================================================================
 # Main Calculation Functions
 # =============================================================================
@@ -383,7 +409,7 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
     summary_data = []
     grand_totals = {code["internal_key"]: 0 for code in payment_codes}
     grand_totals.update({
-        "payment": 0, "standby_payment": 0, "travel": 0, "extras": 0, "total_payment": 0,
+        "payment": 0, "standby_payment": 0, "travel": 0, "professional_support": 0, "extras": 0, "total_payment": 0,
         "calc150_shabbat_100": 0, "calc150_shabbat_50": 0,
         "vacation_payment": 0, "vacation_minutes": 0,
         "sick_payment": 0, "sick_minutes": 0,  # מחלה
@@ -423,5 +449,10 @@ def calculate_monthly_summary(conn, year: int, month: int) -> Tuple[List[Dict], 
             for k, v in monthly_totals.items():
                 if k in grand_totals and isinstance(v, (int, float)) and k not in ("payment", "total_payment", "rounded_total"):
                     grand_totals[k] += v
+
+    # עיגול סה"כ כללי למניעת שגיאות floating point
+    grand_totals["rounded_total"] = round(grand_totals["rounded_total"], 2)
+    grand_totals["total_payment"] = round(grand_totals["total_payment"], 2)
+    grand_totals["payment"] = round(grand_totals["payment"], 2)
 
     return summary_data, grand_totals
